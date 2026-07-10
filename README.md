@@ -174,21 +174,40 @@ extract-site --config config/site_Southern_Co_2024_2025.15min.yaml --skip-downlo
 By default, `extract-site` checks whether the grib files it needs exist and
 downloads whatever is missing before extracting (`--skip-download` to
 disable). Output: one netCDF per (date, hour) under `output_dir/hourly/`,
-optionally concatenated into a single `hrrr_sites_<start>_<end>.nc`.
-Concatenation trusts the filenames' chronological order (`combine="nested"`)
-instead of re-inferring it (`combine="by_coords"`), which is the difference
-between ~1 minute and several+ minutes once there are hundreds of hourly
-files.
+optionally concatenated into a single `hrrr_sites_<start>_<end>.nc`, using
+`--workers` for both the extraction pool and the final concat.
 
-Each hourly netCDF is verified readable right after being written (an
-interrupted or failed `to_netcdf()` can otherwise leave a corrupted-but
+Concatenation reads every hourly file in parallel straight into memory
+(`multiprocessing.Pool(workers)`) and concatenates with plain `xr.concat`,
+instead of `xr.open_mfdataset`'s dask-based lazy loading. Site-extracted
+data is always small (a handful of sites x variables, never the full grid)
+- the whole concatenated dataset comfortably fits in memory, so paying for
+machinery built for data too big to fit in memory only hurts: at file
+counts in the thousands, `open_mfdataset`'s serial-by-default file opening,
+its 128-file LRU handle cache thrashing, and its per-file dask graph
+overhead compound into something far worse than linear. Measured ~45x
+faster (26.8s vs 20+ minutes) on an 8760-file/550MB case, with no need for
+the workaround the dask path requires below.
+
+`hrrr2power.subh.extract.concat_hourly_dask()` keeps the old
+`open_mfdataset`-based implementation (not used by default) for a
+different case this package doesn't cover yet: concatenating full-grid
+(not site-extracted) output too large to fit in memory, where dask's lazy
+loading is actually necessary rather than just overhead. That path also
+has to explicitly re-read `site_name`/`latitude`/`longitude` fresh from a
+single hourly file after concatenation rather than trust
+`open_mfdataset`'s own coordinate handling - at file counts in the
+thousands that silently ended up empty/NaN instead of raising an error
+(confirmed in practice, on the same 8760-file run). The default
+`concat_hourly()` can't hit that failure mode in the first place, since
+every file is already fully in memory before concatenating - nothing lazy
+to go stale.
+
+Each hourly netCDF is also verified readable right after being written (an
+interrupted or failed `to_netcdf()` can otherwise leave a corrupted-but-
 nonzero-size file that `skip_existing` would trust forever - confirmed in
-practice on an 8760-file run) - a failed write is deleted and retried on
-the next run rather than silently kept. `site_name`/`latitude`/`longitude`
-are also re-read fresh from a single hourly file after concatenation,
-rather than trusted from `open_mfdataset`'s own coordinate handling - at
-file counts in the thousands that can silently end up empty/NaN instead of
-raising an error (also confirmed in practice, on the same run).
+practice on the same run) - a failed write is deleted and retried on the
+next run rather than silently kept.
 
 ### 4. Verify integrity of already-downloaded files
 

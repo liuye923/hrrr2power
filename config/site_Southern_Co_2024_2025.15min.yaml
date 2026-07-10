@@ -47,10 +47,10 @@ variables:
     vars:
       t2m: t2m  # 2m temperature
       d2m: d2m  # 2m dewpoint
-      u80: u80  # 80m U wind
-      v80: v80  # 80m V wind
-      u10: u10  # 10m U wind
-      v10: v10  # 10m V wind
+      u: u80    # 80m U wind - cfgrib names this "u" (no CF short name at 80m), not "u80"
+      v: v80    # 80m V wind - same, cfgrib names this "v"
+      u10: u10  # 10m U wind - cfgrib does name this "u10" (standard CF level)
+      v10: v10  # 10m V wind - cfgrib does name this "v10"
 
   surface:
     enabled: true

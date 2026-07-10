@@ -110,7 +110,7 @@ def main() -> None:
     print(f"Output: {output_dir}")
 
     if config.get("options", {}).get("concatenate", False) and success > 0:
-        concat_hourly(hourly_dir, output_dir, config)
+        concat_hourly(hourly_dir, output_dir, config, workers=extract_workers)
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@
 
 import warnings
 from collections import defaultdict
+from multiprocessing import Pool
 from pathlib import Path
 
 import cfgrib
@@ -201,7 +202,64 @@ def process_one(task, sites: pd.DataFrame, config: dict, hourly_dir: Path, skip_
     return out_file
 
 
-def concat_hourly(hourly_dir: Path, output_dir: Path, config: dict):
+def _load_one_hourly(path_str: str) -> xr.Dataset:
+    """Worker for concat_hourly's parallel load - must be module-level so
+    multiprocessing can pickle it. Loads fully into memory (not lazy) and
+    closes the source file immediately.
+    """
+    with xr.open_dataset(path_str) as ds:
+        return ds.load()
+
+
+def concat_hourly(hourly_dir: Path, output_dir: Path, config: dict, workers: int = 8):
+    """Concatenate every hourly site-extraction file into one netCDF.
+
+    Site-extracted data is always small (a handful of sites x variables,
+    never the full grid) - the whole concatenated dataset comfortably fits
+    in memory, so there's no reason to pay for open_mfdataset's dask-based
+    lazy machinery here. That machinery is built for data too big to fit
+    in memory, and at file counts in the thousands it actively hurts:
+    open_mfdataset opens files serially by default, its file-handle LRU
+    cache (128 by default) thrashes once file count exceeds that by a lot,
+    and building a dask graph node per (tiny) file has its own overhead.
+    Measured ~45x faster (26.8s vs 20+ minutes) reading files in parallel
+    directly into memory and concatenating with plain xr.concat, for the
+    same 8760-file/550MB southern_co case - see concat_hourly_dask() below,
+    kept for the different case of concatenating full-grid (not
+    site-extracted) data too large to fit in memory, where dask's laziness
+    is actually necessary.
+    """
+    files = sorted(hourly_dir.glob("hrrr_sites_*.nc"))
+    if not files:
+        print("No hourly files to concatenate.")
+        return
+
+    print(f"Concatenating {len(files)} hourly files...")
+    with Pool(min(max(workers, 1), len(files))) as pool:
+        datasets = pool.map(_load_one_hourly, [str(f) for f in files], chunksize=20)
+
+    ds = xr.concat(datasets, dim="time", coords="minimal", compat="override", data_vars="minimal")
+    ds = ds.sortby("time")
+    assert (ds.site_name.values != "").all(), "site_name empty after concat"
+
+    proc = config.get("processing", {})
+    out_file = output_dir / f"hrrr_sites_{proc.get('start_date')}_{proc.get('end_date')}.nc"
+    ds.to_netcdf(out_file)
+    ds.close()
+    print(f"Saved concatenated file -> {out_file}")
+
+    if not config.get("options", {}).get("keep_hourly", True):
+        for f in files:
+            f.unlink()
+        print("Removed hourly files (keep_hourly: false).")
+
+
+def concat_hourly_dask(hourly_dir: Path, output_dir: Path, config: dict):
+    """Dask/open_mfdataset-based concat - NOT used by default (see
+    concat_hourly() above), kept for concatenating data too large to fit
+    in memory (e.g. full-grid, not site-extracted, output), where dask's
+    lazy loading is necessary rather than just unhelpful overhead.
+    """
     files = sorted(hourly_dir.glob("hrrr_sites_*.nc"))
     if not files:
         print("No hourly files to concatenate.")
