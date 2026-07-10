@@ -1,0 +1,20 @@
+# Example standalone download run - copy this file and adjust the date
+# range/variables for a one-off bulk download outside of any site-extraction
+# config. Run with:
+#   download-subh --config config/download_hrrr_subh_example.yaml
+
+configure_file: /global/cfs/projectdirs/m1657/liuy351/DATA/HRRR/download_fastheribie/scripts/config/default_download_subh.yaml
+
+start_date: "2025-12-01"
+end_date: "2025-12-31"
+# Alternative to start_date/end_date - an explicit (non-range) list of dates:
+# days: ["2025-01-01", "2025-01-02", "2026-01-01"]
+
+# Which of configure_file's search_patterns to download. Omit this key to
+# download every variable defined there.
+variables: [t2m, d2m, u80, v80, psfc]
+
+# Any of these override configure_file's defaults for this run only.
+# init_hours: [0, 6, 12, 18]
+# workers: 8
+# overwrite: false

@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hrrr2power"
+version = "0.1.0"
+description = "Download and extract weather-model data (starting with HRRR subhourly) for power-site timeseries"
+requires-python = ">=3.10"
+dependencies = [
+    "herbie-data",
+    "cfgrib",
+    "xarray",
+    "pandas",
+    "numpy",
+    "pyyaml",
+    "tqdm",
+]
+
+[project.scripts]
+download-subh = "hrrr2power.cli.download_subh:main"
+extract-site = "hrrr2power.cli.extract_site:main"
+inventory-subh = "hrrr2power.cli.inventory_subh:main"
+verify-subh = "hrrr2power.cli.verify_subh:main"
+
+[tool.setuptools.packages.find]
+include = ["hrrr2power*"]

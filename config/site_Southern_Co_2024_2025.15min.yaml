@@ -1,0 +1,68 @@
+# Extract 15-minute (sub-hourly) HRRR data for AL_ST sites.
+#
+# Genuine 15-min resolution only exists in wrfsubhf01.grib2 (NOT f00, which is
+# a single-timestep analysis field despite the "subh" name). Each f01 file
+# packs 4 sub-hourly steps: :15, :30, :45, :60 past the top of its init hour.
+# Run `inventory-subh` to discover more variables/patterns.
+
+# Site information
+site_locations_file: /global/cfs/projectdirs/m1657/liuy351/DATA/HRRR/download_fastheribie/sites/southern_co/site_locations.csv
+
+auto_find_indices: false  # set true to force regenerating site_grid_indices.csv
+num_cells: 1
+
+# Input/Output directories
+# grib_dir layout: <grib_dir>/<group>/YYYYMMDD/hrrr.tHHz.wrfsubhf01.grib2
+# <group> is now one folder PER VARIABLE (the rename below), not a combined
+# search group - e.g. u80/YYYYMMDD/... and v80/YYYYMMDD/... are separate
+# downloads, instead of one shared uv80m/ file.
+grib_dir: /global/cfs/projectdirs/m1657/liuy351/DATA/HRRR/download_fastheribie/15min_grib2
+output_dir: /global/cfs/projectdirs/m1657/liuy351/DATA/HRRR/download_fastheribie/sites/southern_co
+
+# Processing date/time range
+processing:
+  start_date: "20250101"
+  end_date: "20251231"
+
+# Auto-download settings: extract-site checks which files are missing
+# for the variables/date range below and downloads them before extracting.
+# Skip with --skip-download.
+# configure_file supplies the base settings (init_hours, workers, retries,
+# retry_wait, overwrite, and each variable's search pattern) - anything set
+# here overrides that file, except search patterns which always come from it.
+download:
+  configure_file: /global/cfs/projectdirs/m1657/liuy351/DATA/HRRR/download_fastheribie/scripts/config/default_download_subh.yaml
+  workers: 16
+  retries: 3
+  retry_wait: 5.0
+  overwrite: false
+
+# Variables to extract (by GRIB typeOfLevel[_stepType]): {short_name: output_name}.
+# output_name must have a matching entry in default_download_subh.yaml's
+# search_patterns, and also names the per-variable download folder:
+# <grib_dir>/<output_name>/YYYYMMDD/
+variables:
+  heightAboveGround:
+    enabled: true
+    vars:
+      t2m: t2m  # 2m temperature
+      d2m: d2m  # 2m dewpoint
+      u80: u80  # 80m U wind
+      v80: v80  # 80m V wind
+      u10: u10  # 10m U wind
+      v10: v10  # 10m V wind
+
+  surface:
+    enabled: true
+    vars:
+      sp: psfc             # surface pressure
+
+# Processing options
+options:
+  skip_existing: true
+  compression: false
+  compression_level: 4
+
+  concatenate: true
+  concat_by: 'period'
+  keep_hourly: true
