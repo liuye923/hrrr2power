@@ -167,7 +167,7 @@ options:
 
 ```bash
 extract-site --config config/site_Southern_Co_2024_2025.15min.yaml
-extract-site --config config/site_Southern_Co_2024_2025.15min.yaml --workers 4
+extract-site --config config/site_Southern_Co_2024_2025.15min.yaml --workers 24
 extract-site --config config/site_Southern_Co_2024_2025.15min.yaml --skip-download
 ```
 
@@ -180,19 +180,35 @@ instead of re-inferring it (`combine="by_coords"`), which is the difference
 between ~1 minute and several+ minutes once there are hundreds of hourly
 files.
 
+Each hourly netCDF is verified readable right after being written (an
+interrupted or failed `to_netcdf()` can otherwise leave a corrupted-but
+nonzero-size file that `skip_existing` would trust forever - confirmed in
+practice on an 8760-file run) - a failed write is deleted and retried on
+the next run rather than silently kept. `site_name`/`latitude`/`longitude`
+are also re-read fresh from a single hourly file after concatenation,
+rather than trusted from `open_mfdataset`'s own coordinate handling - at
+file counts in the thousands that can silently end up empty/NaN instead of
+raising an error (also confirmed in practice, on the same run).
+
 ### 4. Verify integrity of already-downloaded files
 
-`download-subh`/`extract-site`'s skip-check only confirms a file exists and
-is large enough - it trusts the full GRIB check that already ran right
-after that file was downloaded. If a download was interrupted mid-transfer
-in a way that left a valid-looking but incomplete file on disk (e.g. a
-dropped SSH/VPN connection killing `curl` between sub-hourly message
-groups), that trust could be wrong. Run `verify-subh` to re-check every
-file's integrity on demand - it re-opens each one and checks both the
-leading GRIB magic bytes and the trailing GRIB2 end-of-message marker:
+Trust is established once, at write time, not on every read: right after a
+file downloads, `download-subh`/`extract-site` fully parses every GRIB
+message in it via eccodes (catching a message truncated or corrupted
+*anywhere* in the file, not just a transfer cut off at the very end - each
+file is 4 sub-hourly messages appended by separate `curl` calls, so a
+middle one can be broken while the last one completes fine). Everything
+downstream - the skip-check on later runs, `extract-site` itself - just
+trusts that already happened and never re-checks.
+
+`verify-subh` exists for data that predates this check, or for occasional
+spot-checks (e.g. after a suspected filesystem issue) - not for routine
+use, since it's real per-file work (~60ms/file: parsing, not just an
+`open()`), parallelized across `--workers` (default 8):
 
 ```bash
 verify-subh --grib-dir /path/to/15min_grib2
+verify-subh --grib-dir /path/to/15min_grib2 --workers 32
 verify-subh --grib-dir /path/to/15min_grib2 --delete   # remove bad files so download-subh/extract-site re-fetch them
 ```
 

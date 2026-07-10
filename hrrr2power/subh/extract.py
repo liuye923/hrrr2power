@@ -20,6 +20,17 @@ CFGRIB_KWARGS = {
     # needed to recover valid_time on subhourly messages cfgrib/eccodes
     # can't decode on its own (see combine.recover_valid_time)
     "read_keys": ["lengthOfTimeRange", "forecastTime", "indicatorOfUnitForTimeRange"],
+    # Disable cfgrib's on-disk .idx cache. It writes that cache via an
+    # exclusive file-create + separate pickle.dump(); if that gets
+    # interrupted (Ctrl-C, or another worker racing to open the same file)
+    # it leaves a permanent 0-byte stub - every future open then hits
+    # "Can't read index file ...: EOFError: Ran out of input" forever,
+    # since cfgrib never rewrites a file that already exists. It falls back
+    # to rebuilding the index in-memory when that happens, so extraction
+    # still succeeds, but noisily and with a wasted rescan every time.
+    # These files are small enough that rebuilding in-memory on every open
+    # (indexpath="") is cheap and removes the failure mode entirely.
+    "indexpath": "",
 }
 
 
@@ -172,6 +183,21 @@ def process_one(task, sites: pd.DataFrame, config: dict, hourly_dir: Path, skip_
         return None
 
     ds.to_netcdf(out_file)
+
+    # Verify the write actually produced a readable file before trusting it -
+    # an interrupted or failed to_netcdf() write can leave a corrupted-but-
+    # nonzero-size HDF5 file behind, which the skip_existing exists()+size
+    # check above would otherwise trust forever (confirmed in practice: an
+    # 8KB corrupted file survived a whole 8760-file run undetected until
+    # concat_hourly tried to open it). Checked once here, right after
+    # writing, not on every skip_existing check.
+    try:
+        with xr.open_dataset(out_file):
+            pass
+    except Exception:
+        out_file.unlink(missing_ok=True)
+        return None
+
     return out_file
 
 
@@ -200,6 +226,21 @@ def concat_hourly(hourly_dir: Path, output_dir: Path, config: dict):
         data_vars="minimal",
     )
     ds = ds.sortby("time")
+
+    # site_name/latitude/longitude are constant across every hourly file
+    # (assigned once from the same site list in extract_site_data) - but at
+    # file counts in the thousands, open_mfdataset's "minimal" coords (which
+    # lazily borrow them from just the first file) can silently end up
+    # empty/NaN instead of raising an error (confirmed in practice on an
+    # 8760-file concat). Read them fresh from a single file directly rather
+    # than trusting open_mfdataset's handling of them.
+    with xr.open_dataset(files[0]) as first:
+        ds = ds.assign_coords(
+            site_name=("site", first["site_name"].values),
+            latitude=("site", first["latitude"].values),
+            longitude=("site", first["longitude"].values),
+        )
+    assert (ds.site_name.values != "").all(), "site_name still empty after re-assigning from first file"
 
     proc = config.get("processing", {})
     out_file = output_dir / f"hrrr_sites_{proc.get('start_date')}_{proc.get('end_date')}.nc"

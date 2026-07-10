@@ -18,6 +18,7 @@ from multiprocessing import Pool
 from pathlib import Path
 from typing import Any, cast
 
+import eccodes
 import pandas as pd
 from herbie.fast import FastHerbie
 from tqdm import tqdm
@@ -43,22 +44,35 @@ def is_href_error(exc: Exception) -> bool:
 
 
 def is_valid_grib_file(path: Path) -> bool:
-    """Full integrity check: big enough, starts with GRIB, ends with the
-    GRIB2 end-of-message marker (b"7777"). Only the trailing marker check
-    actually catches a transfer interrupted mid-file (e.g. a dropped
-    connection killing curl between one of the 4 sub-hourly message-group
-    appends) - the leading magic bytes alone would still match a
-    truncated-but-started file. Used right after a fresh download, where
-    the network I/O already dwarfs the cost of the extra open(), and by
-    the standalone verify-subh audit command.
+    """Full integrity check: actually parses every GRIB message in the file
+    via eccodes. A header/footer-only check (magic bytes + trailing 7777)
+    only catches a transfer truncated at the very end - each of these files
+    is 4 sub-hourly messages appended by separate curl calls, so a message
+    truncated or corrupted in the *middle* while a later append still
+    completed fine would pass a header/footer check but fail here
+    (confirmed in practice: found 7 such files out of 61320 that a
+    header/footer check missed).
+
+    Costs ~60ms/file (parsing, not just an open()) vs ~0.02ms for a stat -
+    only worth paying once, right after a fresh download (network I/O
+    already dwarfs it) or during a standalone verify-subh audit pass. The
+    day-to-day skip-check (file_already_downloaded) trusts this already
+    ran once and does not call this.
     """
     if not path.exists() or path.stat().st_size < MIN_VALID_SIZE:
         return False
-    with open(path, "rb") as f:
-        if f.read(4) != b"GRIB":
-            return False
-        f.seek(-4, 2)
-        return f.read(4) == b"7777"
+    try:
+        with open(path, "rb") as f:
+            n_messages = 0
+            while True:
+                gid = eccodes.codes_grib_new_from_file(f)
+                if gid is None:
+                    break
+                eccodes.codes_release(gid)
+                n_messages += 1
+        return n_messages > 0
+    except Exception:
+        return False
 
 
 def file_already_downloaded(path: Path) -> bool:
