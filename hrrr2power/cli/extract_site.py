@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
 Extract HRRR site (point) timeseries from the per-variable subset files
-produced by download-subh.
+produced by download-subh/download-prs.
 
 Input layout (one folder per downloaded variable):
-    <grib_dir>/<name>/YYYYMMDD/hrrr.tHHz.wrfsubhf01.grib2
+    <grib_dir>/<name>/YYYYMMDD/<hourly file>
     where <name> is an output_name from this config's "variables" block
     (e.g. u80/v80/t2m/d2m/psfc) - discovered by globbing, not hardcoded.
 
@@ -13,6 +13,10 @@ opened together, filtered against the config's "variables" block (keyed by
 GRIB typeOfLevel[_stepType]), reduced to the requested site locations via
 nearest-grid-point indices, and written to one netCDF per hour. Optionally
 concatenated into a single file for the whole period.
+
+This one command works for any supported product - set the config's
+top-level "product" key ("subh" or "prs"; defaults to "subh" if omitted, so
+existing configs need no changes).
 
 Before extracting, ensure_downloaded() checks whether the grib files needed
 for the config's variables/date range exist, and downloads whatever is
@@ -40,7 +44,16 @@ from tqdm import tqdm
 
 from hrrr2power.config import load_yaml, resolve_days
 from hrrr2power.grid import generate_grid_indices
-from hrrr2power.subh.extract import CFGRIB_KWARGS, concat_hourly, discover_groups, ensure_downloaded, process_one
+
+
+def _product_module(product: str):
+    if product == "subh":
+        import hrrr2power.subh.extract as m
+    elif product == "prs":
+        import hrrr2power.prs.extract as m
+    else:
+        raise SystemExit(f"Unknown product {product!r} - expected 'subh' or 'prs'")
+    return m
 
 
 def main() -> None:
@@ -55,6 +68,12 @@ def main() -> None:
     args = parser.parse_args()
 
     config = load_yaml(args.config_file)
+    product = _product_module(config.get("product", "subh"))
+    CFGRIB_KWARGS = product.CFGRIB_KWARGS
+    concat_hourly = product.concat_hourly
+    discover_groups = product.discover_groups
+    ensure_downloaded = product.ensure_downloaded
+    process_one = product.process_one
 
     if not args.skip_download:
         ensure_downloaded(config, workers=args.workers)
@@ -74,7 +93,7 @@ def main() -> None:
         sites = pd.read_csv(indices_file)
         print(f"Loaded grid indices <- {indices_file}")
     else:
-        sample = next(grib_dir.glob("*/*/hrrr.t*z.wrfsubhf01.grib2"), None)
+        sample = next(grib_dir.glob(f"*/*/{product.FILENAME_GLOB}"), None)
         if sample is None:
             raise SystemExit(f"No grib files found under {grib_dir} to build grid indices")
         print(f"Generating grid indices from sample: {sample}")
