@@ -179,7 +179,17 @@ def process_one(task, sites: pd.DataFrame, config: dict, hourly_dir: Path, skip_
     if skip_existing and out_file.exists() and out_file.stat().st_size > 1000:
         return out_file
 
-    ds = extract_site_data(files, sites, config)
+    # A corrupted/unreadable input grib file must not crash the whole pool -
+    # one bad file out of thousands would otherwise take down every other
+    # task's in-flight work with it via pool.imap() re-raising on the main
+    # process (download.py's per-task retry already isolates failures this
+    # way on the download side; extraction didn't).
+    try:
+        ds = extract_site_data(files, sites, config)
+    except Exception as exc:
+        print(f"SKIP {date_str} {hour_str}z: failed to read input file(s): {exc}")
+        return None
+
     if ds is None:
         return None
 
@@ -240,7 +250,11 @@ def concat_hourly(hourly_dir: Path, output_dir: Path, config: dict, workers: int
 
     ds = xr.concat(datasets, dim="time", coords="minimal", compat="override", data_vars="minimal")
     ds = ds.sortby("time")
-    assert (ds.site_name.values != "").all(), "site_name empty after concat"
+    # A plain if/raise, not assert - this check exists specifically to
+    # catch silent data corruption, so it must not be a no-op under
+    # `python -O`/PYTHONOPTIMIZE, which strips assert statements.
+    if not (ds.site_name.values != "").all():
+        raise ValueError("site_name empty after concat")
 
     proc = config.get("processing", {})
     out_file = output_dir / f"hrrr_sites_{proc.get('start_date')}_{proc.get('end_date')}.nc"
@@ -298,7 +312,9 @@ def concat_hourly_dask(hourly_dir: Path, output_dir: Path, config: dict):
             latitude=("site", first["latitude"].values),
             longitude=("site", first["longitude"].values),
         )
-    assert (ds.site_name.values != "").all(), "site_name still empty after re-assigning from first file"
+    # A plain if/raise, not assert - see concat_hourly() for why.
+    if not (ds.site_name.values != "").all():
+        raise ValueError("site_name still empty after re-assigning from first file")
 
     proc = config.get("processing", {})
     out_file = output_dir / f"hrrr_sites_{proc.get('start_date')}_{proc.get('end_date')}.nc"

@@ -216,9 +216,13 @@ file downloads, `download-subh`/`extract-site` fully parses every GRIB
 message in it via eccodes (catching a message truncated or corrupted
 *anywhere* in the file, not just a transfer cut off at the very end - each
 file is 4 sub-hourly messages appended by separate `curl` calls, so a
-middle one can be broken while the last one completes fine). Everything
-downstream - the skip-check on later runs, `extract-site` itself - just
-trusts that already happened and never re-checks.
+middle one can be broken while the last one completes fine) and requires
+all 4 expected messages to be present (catching one of those 4 curl calls
+silently failing outright - confirmed in practice: found downloaded files
+missing exactly one message, which produced a NaN gap in extracted output
+with no error anywhere, since every message that *was* present parsed
+fine). Everything downstream - the skip-check on later runs, `extract-site`
+itself - just trusts that already happened and never re-checks.
 
 `verify-subh` exists for data that predates this check, or for occasional
 spot-checks (e.g. after a suspected filesystem issue) - not for routine

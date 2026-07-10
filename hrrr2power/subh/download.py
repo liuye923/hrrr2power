@@ -29,6 +29,17 @@ from hrrr2power.logging_utils import redirect_stdout_to_file
 # All four 15-min valid times (+15, +30, +45, +60 min) are packed in fxx=1.
 FXX = [1]
 
+# Every variable's subh f01 file packs exactly 4 sub-hourly messages
+# (:15/:30/:45/:60). Herbie downloads each with its own curl call (one per
+# message group); if one of those calls silently fails (curl's exit code
+# isn't checked - see MIN_VALID_SIZE below) while the others succeed, the
+# file is left with fewer than 4 well-formed messages instead of a
+# truncated one - every message that IS present parses fine, so a
+# per-message validity check alone can't catch it. Confirmed in practice:
+# found real downloaded files missing exactly one message (the :45 step)
+# that silently produced a NaN gap in extracted output instead of an error.
+EXPECTED_MESSAGE_COUNT = 4
+
 # Below this size (bytes) a downloaded file is treated as corrupt/truncated,
 # not a real subset. Herbie's subset() shells out to `curl` via os.system(),
 # which does NOT check curl's exit code - a network hiccup mid-transfer can
@@ -45,13 +56,19 @@ def is_href_error(exc: Exception) -> bool:
 
 def is_valid_grib_file(path: Path) -> bool:
     """Full integrity check: actually parses every GRIB message in the file
-    via eccodes. A header/footer-only check (magic bytes + trailing 7777)
-    only catches a transfer truncated at the very end - each of these files
-    is 4 sub-hourly messages appended by separate curl calls, so a message
+    via eccodes, and requires all EXPECTED_MESSAGE_COUNT of them to be
+    present. A header/footer-only check (magic bytes + trailing 7777) only
+    catches a transfer truncated at the very end - each of these files is 4
+    sub-hourly messages appended by separate curl calls, so a message
     truncated or corrupted in the *middle* while a later append still
     completed fine would pass a header/footer check but fail here
     (confirmed in practice: found 7 such files out of 61320 that a
-    header/footer check missed).
+    header/footer check missed). Requiring the full message count on top of
+    that also catches a whole message going missing - e.g. one of the 4
+    curl calls silently failing - which every-message-parses-fine alone
+    can't detect, since nothing about the remaining messages looks wrong
+    (confirmed in practice: found downloaded files missing exactly one
+    message that silently produced a NaN gap in extracted output).
 
     Costs ~60ms/file (parsing, not just an open()) vs ~0.02ms for a stat -
     only worth paying once, right after a fresh download (network I/O
@@ -70,7 +87,7 @@ def is_valid_grib_file(path: Path) -> bool:
                     break
                 eccodes.codes_release(gid)
                 n_messages += 1
-        return n_messages > 0
+        return n_messages == EXPECTED_MESSAGE_COUNT
     except Exception:
         return False
 
