@@ -1,16 +1,17 @@
 # hrrr2power
 
 Download and extract weather-model data for power-site timeseries. Two HRRR
-products are supported: **subh** (subhourly, 15-minute output) and **prs**
-(hourly, restricted to the F00 analysis field). All the real logic - the
-concurrent download pool, GRIB integrity checking, site extraction, fast
-concat - lives in generic top-level modules
+products are supported: **subh** (subhourly, 15-minute output, defaults to
+fxx=1) and **prs** (hourly, defaults to fxx=0, the F00 analysis field - but
+also serves real forecast lead times). All the real logic - the concurrent
+download pool, GRIB integrity checking, site extraction, fast concat - lives
+in generic top-level modules
 (`hrrr2power.download`/`hrrr2power.extract`/`hrrr2power.combine`/
 `hrrr2power.inventory`); each product subpackage (`hrrr2power.subh`,
-`hrrr2power.prs`) is a thin wrapper that just supplies its own constants
-(forecast hour, expected message count, filename convention). Adding a
-third product means adding another thin subpackage, not touching the
-generic code.
+`hrrr2power.prs`) is a thin wrapper that just supplies its own defaults
+(forecast hour, expected message count, filename convention) - all
+overridable per-run via a config's `fxx` key. Adding a third product means
+adding another thin subpackage, not touching the generic code.
 
 ## Features
 
@@ -64,22 +65,23 @@ scripts/
   pyproject.toml
   hrrr2power/
     __init__.py
-    config.py           # generic: load_yaml, resolve_days, resolve_download_settings
+    config.py           # generic: load_yaml, resolve_days, resolve_download_settings (incl. fxx resolution)
     grid.py              # generic: nearest-grid-point lookup, works with any cfgrib file
     combine.py            # generic: stitches cfgrib's disjoint message groups back together
                            # (no-ops when a product never splits, e.g. prs)
     download.py            # generic: FastHerbie download/retry/relocate/validate + download_range(),
-                            # parameterized by each product's fxx/expected_message_count/filename_template
+                            # tasks flattened to (variable, hour, fxx) triples, parameterized by each
+                            # product's default fxx/expected_message_count/filename_template
     extract.py               # generic: site pixel extraction, discover_groups, ensure_downloaded,
-                              # concat_hourly, parameterized by each product's filename glob
+                              # concat_hourly, parameterized by each product's filename glob template
     inventory.py               # generic: fetch_inventory/unique_variables (Herbie .inventory() dump)
-    subh/                        # HRRR subh (subhourly, fxx=1) product - thin bindings only
-      config.py                    # pins DEFAULT_CONFIG_FILE, calls the generic resolver
-      download.py                    # FXX=[1], EXPECTED_MESSAGE_COUNT=4, wrfsubhf01 filename template
-      extract.py                       # FILENAME_GLOB, re-exports the generic extraction functions
+    subh/                        # HRRR subh (subhourly) product - thin bindings only
+      config.py                    # pins DEFAULT_CONFIG_FILE + default_fxx=[1], calls the generic resolver
+      download.py                    # FXX=[1] default, EXPECTED_MESSAGE_COUNT=4, wrfsubhf{fxx:02d} template
+      extract.py                       # FILENAME_GLOB_TEMPLATE, re-exports the generic extraction functions
       combine.py                         # re-exports hrrr2power.combine (backward compat)
       inventory.py                         # PRODUCT="subh", calls the generic fetch_inventory
-    prs/                          # HRRR prs, restricted to fxx=0 (analysis) - same shape as subh/
+    prs/                          # HRRR prs product - same shape as subh/, FXX=[0] default (F00 analysis)
       config.py, download.py, extract.py, inventory.py
     cli/
       download_subh.py     # entry point for `download-subh`
@@ -364,7 +366,11 @@ way).
 ## Notes on HRRR subh
 
 - Only `fxx=1` carries the 15-minute sub-hourly steps (`+0:15/+0:30/+0:45/+1:00`);
-  `fxx=0` is a single-timestep analysis despite the "subh" name.
+  `fxx=0` is a single-timestep analysis despite the "subh" name. `fxx=1` is
+  subh's default and the only value worth using in practice, but it is a
+  regular config-resolved value (see `download.fxx` in
+  `default_download_subh.yaml`), not hardcoded - override it if you know
+  what you're doing.
 - Each downloaded variable file already contains all 4 sub-hourly steps -
   Herbie's byte-range search matches the variable's messages across all 4
   time blocks in one call, so there's one file per (date, hour, variable),
@@ -377,8 +383,14 @@ way).
 
 ## Notes on HRRR prs
 
-- This package only downloads `fxx=0` (the analysis field) - `prs` also
-  serves real forecast lead times, but nothing here fetches them.
+- Defaults to `fxx=0` (the F00 analysis field), but unlike subh, `prs`
+  genuinely serves real forecast lead times and this package can fetch
+  them - set `download.fxx` in the config to an int (`fxx: 6`) or a list
+  (`fxx: [0, 6, 12]`) to download other/multiple lead times in one run.
+  `extract-site` still targets exactly one fxx per run even if several were
+  downloaded (it uses the first value and prints a note if more than one is
+  configured), since grouping sibling files by (date, hour) alone would be
+  ambiguous across lead times.
 - One message per variable per file (confirmed via `inventory-prs`) - no
   message-group splitting/stitching to do, unlike subh.
 - Variable dictionary keys must be the name cfgrib actually decodes from the

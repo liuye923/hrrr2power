@@ -20,30 +20,34 @@ from hrrr2power.download import (
 
 PRODUCT = "prs"
 
-# Analysis field only.
+# Default forecast hour: F00, the analysis field. Overridable per-run via a
+# run/site config's "fxx" key (see hrrr2power.config.resolve_download_settings)
+# - prs also serves real forecast lead times (e.g. fxx: 6, or fxx: [0, 6, 12]
+# for several at once), unlike subh which only makes sense at fxx=1.
 FXX = [0]
 
-# One message per variable per hour (an analysis field, not subh's packed
-# sub-hourly steps) - see hrrr2power.download.is_valid_grib_file's docstring
-# for what requiring the exact count catches.
+# One message per variable per hour regardless of which single fxx is
+# requested (an analysis or forecast field, not subh's packed sub-hourly
+# steps) - see hrrr2power.download.is_valid_grib_file's docstring for what
+# requiring the exact count catches.
 EXPECTED_MESSAGE_COUNT = 1
 
-FILENAME_TEMPLATE = "hrrr.t{hour:02d}z.wrfprsf00.grib2"
+FILENAME_TEMPLATE = "hrrr.t{hour:02d}z.wrfprsf{fxx:02d}.grib2"
 
 
 def is_valid_grib_file(path: Path) -> bool:
     return _generic_is_valid_grib_file(path, expected_message_count=EXPECTED_MESSAGE_COUNT)
 
 
-def expected_output_path(init_time, search_name: str, save_dir: Path) -> Path:
-    return _generic_expected_output_path(init_time, search_name, save_dir, FILENAME_TEMPLATE)
+def expected_output_path(init_time, search_name: str, save_dir: Path, fxx: int = FXX[0]) -> Path:
+    return _generic_expected_output_path(init_time, search_name, save_dir, FILENAME_TEMPLATE, fxx)
 
 
 def download_range(days, settings):
     return _generic_download_range(
         days, settings,
         product=PRODUCT,
-        fxx=FXX,
+        fxx=settings.get("fxx") or FXX,
         expected_message_count=EXPECTED_MESSAGE_COUNT,
         filename_template=FILENAME_TEMPLATE,
     )

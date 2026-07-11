@@ -27,7 +27,10 @@ def resolve_days(cfg: dict) -> list[pd.Timestamp]:
 
 
 def resolve_download_settings(
-    local_cfg: dict, variable_names: list[str] | None = None, default_config_file: Path | None = None
+    local_cfg: dict,
+    variable_names: list[str] | None = None,
+    default_config_file: Path | None = None,
+    default_fxx: list[int] | None = None,
 ) -> dict:
     """Merge a local config's overrides on top of its configure_file base.
 
@@ -35,12 +38,17 @@ def resolve_download_settings(
     yaml (default: default_config_file, a per-product base config passed by
     the caller - e.g. hrrr2power.subh.config's own default_download_subh.yaml),
     plus any of save_dir/init_hours/workers/retries/retry_wait/overwrite/
-    variables to override. search_patterns always come from the base file,
-    looked up by name - never redefined in local_cfg.
+    fxx/variables to override. search_patterns always come from the base
+    file, looked up by name - never redefined in local_cfg.
 
     variable_names, if given, overrides local_cfg's own "variables" key
     (used by the extract CLI, which derives the variable list from its
     extraction config rather than a "variables" list in the download block).
+
+    fxx resolves from local_cfg, then the base file, then default_fxx (the
+    calling product's own default, e.g. hrrr2power.subh.download.FXX) - a
+    bare int in yaml (`fxx: 6`) is normalized to a 1-item list, matching the
+    list[int] FastHerbie itself expects.
     """
     base_file = Path(local_cfg.get("configure_file", default_config_file))
     base = load_yaml(base_file)
@@ -56,10 +64,14 @@ def resolve_download_settings(
         )
 
     log_file = local_cfg.get("log_file", base.get("log_file"))
+    fxx = local_cfg.get("fxx", base.get("fxx", default_fxx))
+    if isinstance(fxx, int):
+        fxx = [fxx]
 
     return {
         "save_dir": Path(local_cfg.get("save_dir", base["save_dir"])),
         "init_hours": local_cfg.get("init_hours", base["init_hours"]),
+        "fxx": fxx,
         "workers": local_cfg.get("workers", base["workers"]),
         "retries": local_cfg.get("retries", base["retries"]),
         "retry_wait": local_cfg.get("retry_wait", base["retry_wait"]),

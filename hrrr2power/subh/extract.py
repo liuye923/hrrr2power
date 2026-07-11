@@ -16,14 +16,19 @@ from hrrr2power.extract import (
 )
 
 from .config import resolve_download_settings
-from .download import download_range
+from .download import FXX, download_range
 
-# Every hourly subh file is named hrrr.t{HH}z.wrfsubhf01.grib2.
-FILENAME_GLOB = "hrrr.t*z.wrfsubhf01.grib2"
+# Every hourly subh file is named hrrr.t{HH}z.wrfsubhf{fxx:02d}.grib2 -
+# fxx defaults to subh's own default (F01) but can be overridden to match
+# whichever lead time was actually downloaded (see resolve_download_settings's
+# "fxx" key) - extraction targets one fxx per run even though downloading
+# can fetch several at once, to avoid ambiguity in which file represents a
+# given (variable, hour).
+FILENAME_GLOB_TEMPLATE = "hrrr.t*z.wrfsubhf{fxx:02d}.grib2"
 
 
-def discover_groups(grib_dir: Path, days):
-    return _generic_discover_groups(grib_dir, days, FILENAME_GLOB)
+def discover_groups(grib_dir: Path, days, fxx: int = FXX[0]):
+    return _generic_discover_groups(grib_dir, days, FILENAME_GLOB_TEMPLATE.format(fxx=fxx))
 
 
 def ensure_downloaded(config: dict, workers: int | None = None) -> None:

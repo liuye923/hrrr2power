@@ -6,10 +6,12 @@ from pathlib import Path
 
 from hrrr2power.config import resolve_download_settings as _generic_resolve_download_settings
 
+from .download import FXX
+
 DEFAULT_CONFIG_FILE = Path(__file__).resolve().parents[2] / "config" / "default_download_subh.yaml"
 
 
 def resolve_download_settings(local_cfg: dict, variable_names: list[str] | None = None) -> dict:
     return _generic_resolve_download_settings(
-        local_cfg, variable_names, default_config_file=DEFAULT_CONFIG_FILE
+        local_cfg, variable_names, default_config_file=DEFAULT_CONFIG_FILE, default_fxx=FXX
     )

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """
-Download HRRR prs fxx=0 (analysis) subset files - fully yaml-driven.
+Download HRRR prs subset files - fully yaml-driven. Defaults to fxx=0 (the
+F00 analysis field), but prs also serves real forecast lead times - set a
+"fxx" key to fetch a different one, or several in one run.
 
 To run a download, create a run config that references the shared base
 settings (config/default_download_prs.yaml) and adds a date range plus
@@ -11,6 +13,7 @@ settings (config/default_download_prs.yaml) and adds a date range plus
     end_date: "2025-12-31"
     variables: [t2m, d2m, u80, v80, psfc]   # omit to download every variable
                                              # listed in configure_file
+    fxx: [0, 6, 12]   # omit for the default (F00 only); a bare int also works
     # init_hours/workers/retries/retry_wait/overwrite/save_dir may also be
     # set here to override configure_file's defaults for this run.
 
@@ -22,7 +25,7 @@ import argparse
 
 from hrrr2power.config import load_yaml, resolve_days
 from hrrr2power.prs.config import resolve_download_settings
-from hrrr2power.prs.download import FXX, download_range
+from hrrr2power.prs.download import download_range
 
 
 def main() -> None:
@@ -35,12 +38,13 @@ def main() -> None:
     settings = resolve_download_settings(run_cfg)
     settings["log_file"] = settings["log_file"] or (settings["save_dir"] / "herbie_download.log")
 
-    print("HRRR prs (analysis) download")
+    print("HRRR prs download")
     print(f"Config      : {args.config}")
     print(f"Days        : {days[0]:%Y-%m-%d} .. {days[-1]:%Y-%m-%d} ({len(days)} day(s))")
     print(f"Variables   : {[name for name, _ in settings['search_patterns']]}")
     print(f"Init hours  : {settings['init_hours']}")
-    print(f"Forecast hrs: {FXX}  (fixed; prs restricted to the F00 analysis field)")
+    print(f"Forecast hrs: {settings['fxx']}  (default [0], the F00 analysis field; "
+          f"override via a 'fxx' key for other lead times)")
     print(f"Workers     : {settings['workers']}")
     print(f"Retries     : {settings['retries']}")
     print(f"Retry wait  : {settings['retry_wait']}s")

@@ -101,18 +101,18 @@ def file_already_downloaded(path: Path) -> bool:
 
 
 def expected_output_path(
-    init_time: pd.Timestamp, search_name: str, save_dir: Path, filename_template: str
+    init_time: pd.Timestamp, search_name: str, save_dir: Path, filename_template: str, fxx: int
 ) -> Path:
-    """Final on-disk path for a given (init_time, variable), post-relocate.
+    """Final on-disk path for a given (init_time, variable, fxx), post-relocate.
 
-    filename_template is a str.format() template taking `hour` (int), e.g.
-    "hrrr.t{hour:02d}z.wrfsubhf01.grib2".
+    filename_template is a str.format() template taking `hour` (int) and
+    `fxx` (int), e.g. "hrrr.t{hour:02d}z.wrfprsf{fxx:02d}.grib2".
     """
     return (
         save_dir
         / search_name
         / f"{init_time:%Y%m%d}"
-        / filename_template.format(hour=init_time.hour)
+        / filename_template.format(hour=init_time.hour, fxx=fxx)
     )
 
 
@@ -211,27 +211,27 @@ def run_fastherbie_download(
     return False
 
 
-def _download_one_task(task: tuple) -> tuple[str, pd.Timestamp, bool]:
-    """Worker for the flattened (variable, hour) task pool.
+def _download_one_task(task: tuple) -> tuple[str, pd.Timestamp, int, bool]:
+    """Worker for the flattened (variable, hour, fxx) task pool.
 
     Module-level (not a closure) so multiprocessing can pickle it. Each
-    task downloads exactly one (variable, hour) pair, so FastHerbie's own
-    max_threads is moot here (a 1-item DATES list) - the real concurrency
-    comes from how many of these tasks the outer Pool in download_one_day
-    runs at once. That flattens what used to be two nested layers (one
-    variable at a time, threaded across its hours) into a single layer:
-    a worker per (variable, hour) pair. Pooling only across variables
-    degenerates to serial when there's just one variable, or stalls on
-    whichever variable has the most missing hours while other workers
-    sit idle; flattening across both dimensions keeps every worker busy
-    regardless of how the missing data happens to be distributed -
+    task downloads exactly one (variable, hour, fxx) triple, so FastHerbie's
+    own max_threads is moot here (a 1-item DATES list) - the real
+    concurrency comes from how many of these tasks the outer Pool in
+    download_one_day runs at once. That flattens what used to be nested
+    layers (one variable at a time, threaded across its hours) into a
+    single layer: a worker per (variable, hour, fxx) triple. Pooling only
+    across variables degenerates to serial when there's just one variable,
+    or stalls on whichever variable has the most missing hours while other
+    workers sit idle; flattening across every dimension keeps every worker
+    busy regardless of how the missing data happens to be distributed -
     benchmarked ~3x faster than the old sequential-variables approach.
     """
-    (search_name, search_string, init_time, retries, retry_wait, save_dir, log_file,
-     product, fxx, expected_message_count) = task
+    (search_name, search_string, init_time, fxx_value, retries, retry_wait, save_dir, log_file,
+     product, expected_message_count) = task
     ok = run_fastherbie_download(
         init_times=[init_time],
-        fxx=fxx,
+        fxx=[fxx_value],
         search_string=search_string,
         search_name=search_name,
         workers=1,
@@ -242,7 +242,7 @@ def _download_one_task(task: tuple) -> tuple[str, pd.Timestamp, bool]:
         product=product,
         expected_message_count=expected_message_count,
     )
-    return search_name, init_time, ok
+    return search_name, init_time, fxx_value, ok
 
 
 def download_one_day(
@@ -273,21 +273,25 @@ def download_one_day(
     tasks = []
     skipped_requests = 0
     for search_name, search_string in search_patterns:
-        if overwrite:
-            pending_times = init_times
-        else:
-            pending_times = [
-                t for t in init_times
-                if not file_already_downloaded(
-                    expected_output_path(t, search_name, save_dir=save_dir, filename_template=filename_template)
-                )
-            ]
-        skipped_requests += len(init_times) - len(pending_times)
-        tasks.extend(
-            (search_name, search_string, t, retries, retry_wait, save_dir, log_file,
-             product, fxx, expected_message_count)
-            for t in pending_times
-        )
+        for fxx_value in fxx:
+            if overwrite:
+                pending_times = init_times
+            else:
+                pending_times = [
+                    t for t in init_times
+                    if not file_already_downloaded(
+                        expected_output_path(
+                            t, search_name, save_dir=save_dir,
+                            filename_template=filename_template, fxx=fxx_value,
+                        )
+                    )
+                ]
+            skipped_requests += len(init_times) - len(pending_times)
+            tasks.extend(
+                (search_name, search_string, t, fxx_value, retries, retry_wait, save_dir, log_file,
+                 product, expected_message_count)
+                for t in pending_times
+            )
 
     print(f"Pending requests: {len(tasks)} ({skipped_requests} already downloaded, skipped)")
 
@@ -296,7 +300,7 @@ def download_one_day(
 
     failed_requests = 0
     with Pool(min(workers, len(tasks))) as pool:
-        for search_name, init_time, ok in tqdm(
+        for search_name, init_time, fxx_value, ok in tqdm(
             pool.imap_unordered(_download_one_task, tasks),
             total=len(tasks),
             desc=day.strftime("%Y-%m-%d"),
@@ -304,7 +308,8 @@ def download_one_day(
             if not ok:
                 failed_requests += 1
                 print(
-                    f"SKIP {search_name} {init_time.strftime('%Y-%m-%d %H:%M')} after retries."
+                    f"SKIP {search_name} {init_time.strftime('%Y-%m-%d %H:%M')} "
+                    f"f{fxx_value:02d} after retries."
                 )
 
     return expected_requests, failed_requests, skipped_requests

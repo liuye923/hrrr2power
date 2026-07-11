@@ -1,20 +1,28 @@
-# Default download settings for HRRR prs, restricted to fxx=0 (the analysis
-# field), used by the download-prs CLI (standalone) and extract-site's
-# auto-download step.
+# Default download settings for HRRR prs, used by the download-prs CLI
+# (standalone) and extract-site's auto-download step.
 #
 # A site-extraction config's own "download:" section can override any of
-# save_dir/init_hours/workers/retries/retry_wait/overwrite. search_patterns
-# is always sourced from here (referenced by name, not redefined per site)
-# so there is a single place that knows how to download each variable.
+# save_dir/init_hours/fxx/workers/retries/retry_wait/overwrite.
+# search_patterns is always sourced from here (referenced by name, not
+# redefined per site) so there is a single place that knows how to download
+# each variable.
 #
 # Unlike subh (4 sub-hourly messages packed per file, needing disambiguation
-# regexes for u10/v10's instantaneous-vs-averaged variants), prs/F00 has
-# exactly one message per variable - confirmed via `inventory-prs`, no
+# regexes for u10/v10's instantaneous-vs-averaged variants), prs has exactly
+# one message per variable per fxx - confirmed via `inventory-prs`, no
 # ambiguous alternate-variant messages at these levels.
 
 save_dir: /global/cfs/projectdirs/m1657/liuy351/DATA/HRRR/download_fastheribie/hourly_grib2
 
 init_hours: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
+
+# Forecast hour(s) to download. 0 = F00, the analysis field (this is what
+# hrrr2power.prs.download.FXX defaults to if this key is omitted entirely -
+# it's spelled out here so it's visible/discoverable). prs also serves real
+# forecast lead times - e.g. `fxx: 6` for a single one, or `fxx: [0, 6, 12]`
+# for several in one run (each becomes its own file:
+# hrrr.tHHz.wrfprsfNN.grib2, NN = that lead time zero-padded).
+fxx: 0
 
 workers: 4
 retries: 3
@@ -22,7 +30,7 @@ retry_wait: 5.0
 overwrite: false
 
 # One entry per downloadable variable. Each name becomes its own download
-# group/folder: <save_dir>/<name>/YYYYMMDD/hrrr.tHHz.wrfprsf00.grib2
+# group/folder: <save_dir>/<name>/YYYYMMDD/hrrr.tHHz.wrfprsfNN.grib2
 # Run `inventory-prs` to discover more variables/patterns.
 search_patterns:
   t2m:  ":TMP:2 m above ground:"

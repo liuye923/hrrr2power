@@ -75,6 +75,20 @@ def main() -> None:
     ensure_downloaded = product.ensure_downloaded
     process_one = product.process_one
 
+    # Resolve fxx once regardless of --skip-download, so discover_groups
+    # knows which lead time's filenames to look for. Downloading can fetch
+    # several fxx values in one run (see resolve_download_settings's "fxx"
+    # key), but extraction targets exactly one per run - grouping sibling
+    # files by (date, hour) alone would be ambiguous if more than one
+    # lead time's file could match the same slot.
+    dl_cfg = config.get("download", {})
+    variable_names = product.collect_variable_names(config)
+    resolved_fxx = product.resolve_download_settings(dl_cfg, variable_names=variable_names)["fxx"]
+    fxx = resolved_fxx[0]
+    if len(resolved_fxx) > 1:
+        print(f"Note: download.fxx has {len(resolved_fxx)} values {resolved_fxx} - "
+              f"extracting only fxx={fxx} (the first).")
+
     if not args.skip_download:
         ensure_downloaded(config, workers=args.workers)
 
@@ -93,7 +107,7 @@ def main() -> None:
         sites = pd.read_csv(indices_file)
         print(f"Loaded grid indices <- {indices_file}")
     else:
-        sample = next(grib_dir.glob(f"*/*/{product.FILENAME_GLOB}"), None)
+        sample = next(grib_dir.glob(f"*/*/{product.FILENAME_GLOB_TEMPLATE.format(fxx=fxx)}"), None)
         if sample is None:
             raise SystemExit(f"No grib files found under {grib_dir} to build grid indices")
         print(f"Generating grid indices from sample: {sample}")
@@ -103,7 +117,7 @@ def main() -> None:
         print(f"Saved grid indices -> {indices_file}")
 
     days = resolve_days(config["processing"])
-    tasks = list(discover_groups(grib_dir, days))
+    tasks = list(discover_groups(grib_dir, days, fxx=fxx))
     print(f"Found {len(tasks)} (date, hour) groups to process")
 
     if not tasks:

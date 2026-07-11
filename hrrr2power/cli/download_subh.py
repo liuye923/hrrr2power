@@ -19,11 +19,10 @@ Usage (after `pip install -e .` from the scripts/ directory):
 """
 
 import argparse
-from pathlib import Path
 
 from hrrr2power.config import load_yaml, resolve_days
 from hrrr2power.subh.config import resolve_download_settings
-from hrrr2power.subh.download import FXX, download_range
+from hrrr2power.subh.download import download_range
 
 
 def main() -> None:
@@ -41,7 +40,8 @@ def main() -> None:
     print(f"Days        : {days[0]:%Y-%m-%d} .. {days[-1]:%Y-%m-%d} ({len(days)} day(s))")
     print(f"Variables   : {[name for name, _ in settings['search_patterns']]}")
     print(f"Init hours  : {settings['init_hours']}")
-    print(f"Forecast hrs: {FXX}  (fixed; subh fxx=1 contains all 4 x 15-min steps)")
+    print(f"Forecast hrs: {settings['fxx']}  (default fxx=1; subh's sub-hourly steps are only "
+          f"meaningful there - override via a 'fxx' key if you know what you're doing)")
     print(f"Workers     : {settings['workers']}")
     print(f"Retries     : {settings['retries']}")
     print(f"Retry wait  : {settings['retry_wait']}s")
