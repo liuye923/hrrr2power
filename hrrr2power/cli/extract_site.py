@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Extract HRRR site (point) timeseries from the per-variable subset files
-produced by download-subh/download-prs.
+produced by download-subh/download-prs/download-nat.
 
 Input layout (one folder per downloaded variable):
     <grib_dir>/<name>/YYYYMMDD/<hourly file>
@@ -15,8 +15,8 @@ nearest-grid-point indices, and written to one netCDF per hour. Optionally
 concatenated into a single file for the whole period.
 
 This one command works for any supported product - set the config's
-top-level "product" key ("subh" or "prs"; defaults to "subh" if omitted, so
-existing configs need no changes).
+top-level "product" key ("subh", "prs", or "nat"; defaults to "subh" if
+omitted, so existing configs need no changes).
 
 Before extracting, ensure_downloaded() checks whether the grib files needed
 for the config's variables/date range exist, and downloads whatever is
@@ -51,8 +51,10 @@ def _product_module(product: str):
         import hrrr2power.subh.extract as m
     elif product == "prs":
         import hrrr2power.prs.extract as m
+    elif product == "nat":
+        import hrrr2power.nat.extract as m
     else:
-        raise SystemExit(f"Unknown product {product!r} - expected 'subh' or 'prs'")
+        raise SystemExit(f"Unknown product {product!r} - expected 'subh', 'prs', or 'nat'")
     return m
 
 

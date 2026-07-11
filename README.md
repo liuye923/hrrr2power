@@ -1,21 +1,23 @@
 # hrrr2power
 
-Download and extract weather-model data for power-site timeseries. Two HRRR
-products are supported: **subh** (subhourly, 15-minute output, defaults to
-fxx=1) and **prs** (hourly, defaults to fxx=0, the F00 analysis field - but
-also serves real forecast lead times). All the real logic - the concurrent
-download pool, GRIB integrity checking, site extraction, fast concat - lives
-in generic top-level modules
+Download and extract weather-model data for power-site timeseries. Three
+HRRR products are supported: **subh** (subhourly, 15-minute output,
+defaults to fxx=1), **prs** (hourly pressure-level product, defaults to
+fxx=0, the F00 analysis field - but also serves real forecast lead times),
+and **nat** (hourly native/model-level product, same shape as prs - also
+defaults to fxx=0, also serves real forecast lead times). All the real
+logic - the concurrent download pool, GRIB integrity checking, site
+extraction, fast concat - lives in generic top-level modules
 (`hrrr2power.download`/`hrrr2power.extract`/`hrrr2power.combine`/
 `hrrr2power.inventory`); each product subpackage (`hrrr2power.subh`,
-`hrrr2power.prs`) is a thin wrapper that just supplies its own defaults
-(forecast hour, expected message count, filename convention) - all
-overridable per-run via a top-level `fxx` key (a bare int or a list, e.g.
-`fxx: [0, 6, 12]`) in either a standalone download config or a site-extraction
-config; it sits alongside `product`, not nested under `download:`, since it
-picks a product variant/lead-time rather than a download mechanic like
-`workers`/`retries`. Adding a third product means adding another thin
-subpackage, not touching the generic code.
+`hrrr2power.prs`, `hrrr2power.nat`) is a thin wrapper that just supplies its
+own defaults (forecast hour, expected message count, filename convention) -
+all overridable per-run via a top-level `fxx` key (a bare int or a list,
+e.g. `fxx: [0, 6, 12]`) in either a standalone download config or a
+site-extraction config; it sits alongside `product`, not nested under
+`download:`, since it picks a product variant/lead-time rather than a
+download mechanic like `workers`/`retries`. Adding a fourth product means
+adding another thin subpackage, not touching the generic code.
 
 ## Features
 
@@ -91,15 +93,19 @@ scripts/
       inventory.py                         # PRODUCT="subh", calls the generic fetch_inventory
     prs/                          # HRRR prs product - same shape as subh/, FXX=[0] default (F00 analysis)
       config.py, download.py, extract.py, inventory.py
+    nat/                          # HRRR nat (native/model-level) product - same shape as prs/,
+      config.py, download.py, extract.py, inventory.py   # FXX=[0] default (F00 analysis)
     cli/
       download_subh.py     # entry point for `download-subh`
       download_prs.py        # entry point for `download-prs`
-      extract_site.py          # entry point for `extract-site` - single command for either product,
-                                # dispatches on the config's `product:` key (default "subh")
-      inventory_subh.py          # entry point for `inventory-subh`
-      inventory_prs.py             # entry point for `inventory-prs`
-      verify_subh.py                 # entry point for `verify-subh` (audits either product's directory,
-                                      # --expected-message-count picks which)
+      download_nat.py          # entry point for `download-nat`
+      extract_site.py            # entry point for `extract-site` - single command for any product,
+                                  # dispatches on the config's `product:` key (default "subh")
+      inventory_subh.py            # entry point for `inventory-subh`
+      inventory_prs.py               # entry point for `inventory-prs`
+      inventory_nat.py                 # entry point for `inventory-nat`
+      verify_subh.py                     # entry point for `verify-subh` (audits any product's directory,
+                                          # --expected-message-count picks which)
   config/
     default_download_subh.yaml       # base download settings + variable dictionary (subh)
     default_download_prs.yaml          # base download settings + variable dictionary (prs)
@@ -328,6 +334,17 @@ directly (a standard CF level), so those keys match their own output name.
 Run `inventory-prs` to check any new variable's actual decoded name before
 adding it to `default_download_prs.yaml`.
 
+`nat` (native/model-level) works exactly the same way as `prs` above - swap
+in `download-nat`/`default_download_nat.yaml`/`product: nat`. Its near-surface
+diagnostic fields (t2m/d2m/u10/v10/u80/v80/psfc) are computed once by HRRR's
+postprocessing and copied into every product's output file, so `nat`'s
+values for these 7 variables are identical to `prs`'s and its variable keys
+decode the same way (verified against real data: byte-for-byte identical
+site-pixel values for the same date/hour). `nat` is only worth using over
+`prs` if you need one of its ~1100 other (non-near-surface, model-level)
+fields that `prs` doesn't carry - add it to `default_download_nat.yaml`'s
+`search_patterns` after checking its decoded name with `inventory-nat`.
+
 ### 3d. Serving downloads from an already-downloaded local archive
 
 If you already have full (not byte-range subset) grib2 files sitting on
@@ -490,3 +507,20 @@ way).
   matching variable in the file and extracts nothing for it, which is easy
   to miss until you notice a variable is entirely absent from the output.
   Check with `inventory-prs` before adding a new variable.
+
+## Notes on HRRR nat
+
+- Structurally identical to `prs` in every way this package cares about:
+  defaults to `fxx=0`, one message per variable per file, same `fxx`/
+  `local_archive_dir` config keys, same variable-key-decoding caveats (see
+  "Notes on HRRR prs" above - everything there applies here too).
+- The only real difference is scope: `nat` carries HRRR's full native/model-
+  level output (~1100 messages/file - pressure/temperature/moisture/wind
+  etc. on every model level, plus the same near-surface diagnostics `prs`
+  has) versus `prs`'s ~700 messages (pressure-level + near-surface fields
+  only). For the 7 variables this package downloads by default
+  (t2m/d2m/u10/v10/u80/v80/psfc), `nat` and `prs` give byte-for-byte
+  identical values (verified against real data) - HRRR's postprocessing
+  computes these near-surface diagnostics once and copies them into every
+  product's file. Use `nat` specifically to reach one of its model-level
+  fields that `prs` doesn't carry; otherwise `prs` is the smaller download.

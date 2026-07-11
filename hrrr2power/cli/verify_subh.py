@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Audit already-downloaded HRRR grib2 files for integrity (any product -
-subh or prs - since --grib-dir already points at just one product's data).
+subh, prs, or nat - since --grib-dir already points at just one product's data).
 
 download-subh/download-prs/extract-site's skip-check only checks that a
 file exists and is large enough - it trusts that whatever passed the full

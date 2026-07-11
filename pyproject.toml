@@ -20,9 +20,11 @@ dependencies = [
 [project.scripts]
 download-subh = "hrrr2power.cli.download_subh:main"
 download-prs = "hrrr2power.cli.download_prs:main"
+download-nat = "hrrr2power.cli.download_nat:main"
 extract-site = "hrrr2power.cli.extract_site:main"
 inventory-subh = "hrrr2power.cli.inventory_subh:main"
 inventory-prs = "hrrr2power.cli.inventory_prs:main"
+inventory-nat = "hrrr2power.cli.inventory_nat:main"
 verify-subh = "hrrr2power.cli.verify_subh:main"
 
 [tool.setuptools.packages.find]
