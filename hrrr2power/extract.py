@@ -11,6 +11,7 @@ from multiprocessing import Pool
 from pathlib import Path
 
 import cfgrib
+import numpy as np
 import pandas as pd
 import xarray as xr
 
@@ -109,10 +110,30 @@ def ensure_downloaded(
 
 
 def extract_site_data(files: list[Path], sites: pd.DataFrame, config: dict) -> xr.Dataset | None:
-    """Open the sibling variable files for one (date, hour) and pull out site pixels."""
+    """Open the sibling variable files for one (date, hour) and pull out site pixels.
+
+    sites has one row per site (num_cells=1, the default), or num_cells rows
+    per site with an added "cell" column (num_cells=4 - see
+    hrrr2power.grid.generate_grid_indices for the 2x2-box geometry) - rows
+    must be grouped by site in contiguous num_cells-sized blocks, which is
+    how generate_grid_indices/its cached CSV always produce them. Extracted
+    variables gain a "cell" dimension in the latter case; site_name/
+    latitude/longitude stay one value per physical site either way.
+    """
     var_arrays = defaultdict(list)
     reference_time = None
     variables_config = config.get("variables", {})
+
+    has_cells = "cell" in sites.columns
+    if has_cells:
+        n_cells = sites["cell"].nunique()
+        x_index = xr.DataArray(sites["x_index"].values.reshape(-1, n_cells), dims=("site", "cell"))
+        y_index = xr.DataArray(sites["y_index"].values.reshape(-1, n_cells), dims=("site", "cell"))
+        site_rows = sites.drop_duplicates("site_name", keep="first")
+    else:
+        x_index = xr.DataArray(sites["x_index"].values, dims="site")
+        y_index = xr.DataArray(sites["y_index"].values, dims="site")
+        site_rows = sites
 
     for f in files:
         with warnings.catch_warnings():
@@ -137,10 +158,7 @@ def extract_site_data(files: list[Path], sites: pd.DataFrame, config: dict) -> x
             if not vars_to_extract:
                 continue
 
-            site_data = ds[vars_to_extract].isel(
-                x=xr.DataArray(sites["x_index"].values, dims="site"),
-                y=xr.DataArray(sites["y_index"].values, dims="site"),
-            )
+            site_data = ds[vars_to_extract].isel(x=x_index, y=y_index)
             site_data = site_data.rename({v: vars_config[v] for v in vars_to_extract})
             for name, da in site_data.data_vars.items():
                 var_arrays[name].append(da)
@@ -151,10 +169,17 @@ def extract_site_data(files: list[Path], sites: pd.DataFrame, config: dict) -> x
     combined_vars = combine_named_arrays(var_arrays, reference_time)
     combined = xr.merge(list(combined_vars.values()), compat="override")
     combined = combined.assign_coords(
-        site_name=("site", sites["site_name"].values),
-        latitude=("site", sites["latitude"].values),
-        longitude=("site", sites["longitude"].values),
+        site_name=("site", site_rows["site_name"].values),
+        latitude=("site", site_rows["latitude"].values),
+        longitude=("site", site_rows["longitude"].values),
     )
+    if has_cells:
+        combined = combined.assign_coords(
+            cell=("cell", np.arange(n_cells)),
+            cell_lat=(("site", "cell"), sites["grid_lat"].values.reshape(-1, n_cells)),
+            cell_lon=(("site", "cell"), sites["grid_lon"].values.reshape(-1, n_cells)),
+            cell_distance_km=(("site", "cell"), sites["distance_km"].values.reshape(-1, n_cells)),
+        )
 
     if "time" in combined.coords:
         combined = combined.drop_vars("time", errors="ignore")

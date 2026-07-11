@@ -103,6 +103,8 @@ def main() -> None:
 
     grib_dir = Path(config["grib_dir"])
     num_cells = config.get("num_cells", 1)
+    if num_cells not in (1, 4):
+        raise SystemExit(f"num_cells must be 1 or 4, got {num_cells!r}")
     indices_file = site_locations_file.parent / (
         "site_grid_indices_4cells.csv" if num_cells == 4 else "site_grid_indices.csv"
     )
@@ -115,7 +117,7 @@ def main() -> None:
         if sample is None:
             raise SystemExit(f"No grib files found under {grib_dir} to build grid indices")
         print(f"Generating grid indices from sample: {sample}")
-        sites = generate_grid_indices(sites_raw, sample, backend_kwargs=CFGRIB_KWARGS)
+        sites = generate_grid_indices(sites_raw, sample, backend_kwargs=CFGRIB_KWARGS, num_cells=num_cells)
         indices_file.parent.mkdir(parents=True, exist_ok=True)
         sites.to_csv(indices_file, index=False)
         print(f"Saved grid indices -> {indices_file}")

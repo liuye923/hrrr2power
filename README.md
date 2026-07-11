@@ -71,7 +71,8 @@ scripts/
     __init__.py
     config.py           # generic: load_yaml, resolve_days, resolve_download_cfg (folds a config's
                          # top-level "fxx" into its download settings), resolve_download_settings
-    grid.py              # generic: nearest-grid-point lookup, works with any cfgrib file
+    grid.py              # generic: nearest-grid-point lookup (num_cells=1) or surrounding
+                         # 2x2 box (num_cells=4), works with any cfgrib file
     combine.py            # generic: stitches cfgrib's disjoint message groups back together
                            # (no-ops when a product never splits, e.g. prs)
     download.py            # generic: FastHerbie download/retry/relocate/validate + download_range(),
@@ -170,6 +171,8 @@ block describing what to pull out and how to rename it (keyed by GRIB
 ```yaml
 # config/site_Southern_Co_2024_2025.15min.yaml
 site_locations_file: /path/to/site_locations.csv   # columns: site_name, latitude, longitude
+num_cells: 1   # optional - 1 (default, nearest grid cell only) or 4 (2x2 box
+               # around the site, see "Site pixel: nearest cell vs 2x2 box" below)
 grib_dir: /path/to/15min_grib2
 output_dir: /path/to/output
 
@@ -239,6 +242,38 @@ interrupted or failed `to_netcdf()` can otherwise leave a corrupted-but-
 nonzero-size file that `skip_existing` would trust forever - confirmed in
 practice on the same run) - a failed write is deleted and retried on the
 next run rather than silently kept.
+
+#### Site pixel: nearest cell vs 2x2 box
+
+`num_cells` (default `1`) controls how many grid cells are extracted per
+site:
+
+- `num_cells: 1` - just the single nearest grid cell (`find_nearest_grid_point`
+  in `hrrr2power.grid`). Output variables have shape `(time, site)`, same as
+  always.
+- `num_cells: 4` - the 2x2 box of grid cells that geometrically surrounds the
+  site (`find_surrounding_cells`), for e.g. bilinear interpolation instead of
+  nearest-neighbor. Output variables gain a `cell` dimension, shape
+  `(time, site, cell)`; `site_name`/`latitude`/`longitude` stay one value per
+  physical site (not per cell), and `cell_lat`/`cell_lon`/`cell_distance_km`
+  (`(site, cell)`) are added so you can compute interpolation weights from
+  the actual box geometry. Cell 0 is always the nearest point, matching
+  `num_cells: 1`'s result; cells 1-3 fill out the box in whichever direction
+  the site actually falls (HRRR's grid isn't lat/lon-aligned, so this needs
+  a local-direction projection, not a fixed offset).
+
+Either way, `num_cells` only changes which grid indices are looked up - it
+doesn't affect `concat_hourly`, which always concatenates along `time` only;
+the `site`/`cell` structure is fixed for an entire run since the site list
+is only resolved once (see `hrrr2power.grid.generate_grid_indices`), so
+there's nothing for concatenation to reconcile across hours.
+
+Grid indices are cached to `site_grid_indices.csv` (`num_cells: 1`) or
+`site_grid_indices_4cells.csv` (`num_cells: 4`) next to `site_locations_file`
+- separate files, so switching `num_cells` between runs never reads a stale
+cache written under the other setting. Delete the file (or set
+`auto_find_indices: true`) to force regenerating it, e.g. after changing
+`site_locations_file`'s contents.
 
 ### 3c. Using HRRR prs instead of subh
 
