@@ -167,7 +167,7 @@ def extract_from_local_archive(
     search_string: str,
     out_path: Path,
     expected_message_count: int,
-) -> bool:
+) -> str | None:
     """Extract one variable's message(s) for one (date, hour, fxx) directly
     out of an already-downloaded full grib2 file, instead of downloading a
     byte-range subset over HTTP - skips the network data transfer entirely
@@ -191,24 +191,31 @@ def extract_from_local_archive(
     that; it only ever reads the specific message bytes needed, which
     decode exactly as fast as any other single-message subset file.
 
-    Returns False on any failure (message not in this file's inventory,
-    read/decode error, wrong message count) so the caller falls back to a
-    normal network download - a local archive is meant to be pure upside,
-    never a new way to fail a download that would otherwise have succeeded.
+    Returns "local_idx"/"local_inventory" (whichever byte-range lookup
+    succeeded) on success, so the caller can report which one actually ran
+    - lets download_one_day's progress bar show, live, whether a run is
+    genuinely hitting zero-network local reads or still paying for a
+    per-file Herbie.inventory() request. Returns None on any failure
+    (message not in this file's inventory, read/decode error, wrong
+    message count) so the caller falls back to a normal network download -
+    a local archive is meant to be pure upside, never a new way to fail a
+    download that would otherwise have succeeded.
     """
     try:
         local_idx = Path(f"{archive_file}.idx")
         if local_idx.exists():
             idx_df = _parse_local_idx(local_idx)
             idx_df = idx_df[idx_df["search_this"].str.contains(search_string, regex=True)]
+            method = "local_idx"
         else:
             from herbie import Herbie
 
             with redirect_stdout_to_file(out_path.parent / "herbie_local_archive.log"):
                 H = Herbie(herbie_date, model="hrrr", product=product, fxx=fxx, verbose=False)
                 idx_df = H.inventory(search_string)
+            method = "local_inventory"
         if idx_df.empty:
-            return False
+            return None
 
         start_byte = int(idx_df["start_byte"].min())
         end_byte = idx_df["end_byte"].max()
@@ -226,11 +233,11 @@ def extract_from_local_archive(
 
         if not is_valid_grib_file(out_path, expected_message_count):
             out_path.unlink(missing_ok=True)
-            return False
-        return True
+            return None
+        return method
     except Exception:
         out_path.unlink(missing_ok=True)
-        return False
+        return None
 
 
 def relocate_subset_file(path: Path, search_name: str, save_dir: Path) -> Path:
@@ -350,6 +357,14 @@ def _download_one_task(task: tuple) -> tuple[str, pd.Timestamp, int, bool, str]:
     (message not found, read/decode error), so a misconfigured or
     partial archive can never make a download fail that would otherwise
     have succeeded over the network.
+
+    The returned `source` is one of "local_idx" (local file + local .idx,
+    zero network), "local_inventory" (local file, but the byte range came
+    from Herbie's network .inventory() since no local .idx existed), or
+    "network" (no local_archive_dir hit at all - the normal byte-range
+    subset download) - download_one_day's progress bar reports live counts
+    of each so a run's actual data source is visible while it's happening,
+    not just guessed at from how fast/slow it feels.
     """
     (search_name, search_string, init_time, fxx_value, retries, retry_wait, save_dir, log_file,
      product, expected_message_count, filename_template, local_archive_dir,
@@ -362,7 +377,7 @@ def _download_one_task(task: tuple) -> tuple[str, pd.Timestamp, int, bool, str]:
         )
         if archive_file.exists():
             out_path = expected_output_path(init_time, search_name, save_dir, filename_template, fxx_value)
-            if extract_from_local_archive(
+            method = extract_from_local_archive(
                 archive_file=archive_file,
                 herbie_date=init_time,
                 product=product,
@@ -370,8 +385,9 @@ def _download_one_task(task: tuple) -> tuple[str, pd.Timestamp, int, bool, str]:
                 search_string=search_string,
                 out_path=out_path,
                 expected_message_count=expected_message_count,
-            ):
-                return search_name, init_time, fxx_value, True, "local"
+            )
+            if method is not None:
+                return search_name, init_time, fxx_value, True, method
 
     ok = run_fastherbie_download(
         init_times=[init_time],
@@ -448,25 +464,36 @@ def download_one_day(
         return expected_requests, 0, skipped_requests
 
     failed_requests = 0
-    local_hits = 0
+    source_counts = {"local_idx": 0, "local_inventory": 0, "network": 0}
     with Pool(min(workers, len(tasks))) as pool:
-        for search_name, init_time, fxx_value, ok, source in tqdm(
+        progress = tqdm(
             pool.imap_unordered(_download_one_task, tasks),
             total=len(tasks),
             desc=day.strftime("%Y-%m-%d"),
-        ):
+        )
+        for search_name, init_time, fxx_value, ok, source in progress:
             if not ok:
                 failed_requests += 1
                 print(
                     f"SKIP {search_name} {init_time.strftime('%Y-%m-%d %H:%M')} "
                     f"f{fxx_value:02d} after retries."
                 )
-            elif source == "local":
-                local_hits += 1
+            else:
+                source_counts[source] += 1
+            # Live, per-task breakdown of where bytes are actually coming
+            # from - local_idx is zero-network, local_inventory still pays
+            # for one small Herbie .inventory() request per file, network
+            # is the full byte-range subset download. Visible while the
+            # bar is running, not just as a summary after the fact, so a
+            # run can be confirmed to be hitting the local archive (or
+            # not) without waiting for the whole day to finish.
+            if local_archive_dir is not None:
+                progress.set_postfix(source_counts, refresh=False)
 
     if local_archive_dir is not None:
-        print(f"  ({local_hits}/{len(tasks)} served from local archive, "
-              f"{len(tasks) - local_hits - failed_requests} fell back to network)")
+        print(f"  (local_idx={source_counts['local_idx']}, "
+              f"local_inventory={source_counts['local_inventory']}, "
+              f"network={source_counts['network']}, out of {len(tasks)})")
 
     return expected_requests, failed_requests, skipped_requests
 
