@@ -116,6 +116,49 @@ def expected_output_path(
     )
 
 
+def _parse_local_idx(idx_path: Path) -> pd.DataFrame:
+    """Parse a local NOAA/wgrib2-style plain-text .idx sidecar (e.g. one
+    fetched by 01_download_from_aws.py/backfill_idx.py) into the same shape
+    Herbie.inventory() returns (start_byte/end_byte/search_this) - lets
+    extract_from_local_archive() find a message's byte range with zero
+    network requests, instead of Herbie's own .inventory(), which always
+    fetches the idx over HTTP regardless of whether the grib2 file itself
+    is local.
+
+    Mirrors Herbie's own idx parsing exactly (herbie.core.Herbie.
+    index_as_dataframe's "wgrib2" branch) so the same search_string
+    patterns already used throughout this package (matched against idx
+    lines like ":TMP:2 m above ground:") work unchanged here. A message's
+    end_byte is inferred from the *next* message's start (idx lines only
+    give a start offset) - the last message in the file gets NaN, meaning
+    "read to EOF".
+    """
+    df = pd.read_csv(
+        idx_path, sep=":",
+        names=["grib_message", "start_byte", "reference_time", "variable",
+               "level", "forecast_time", "?", "??", "???"],
+    )
+    df["start_byte"] = df["start_byte"].astype(int)
+    df["end_byte"] = df["start_byte"].shift(-1) - 1
+    # Reorder so end_byte comes *before* variable - df.loc[:, "variable":]
+    # below takes every column from "variable" to the last one to build
+    # search_this, and end_byte was just appended at the end by the
+    # assignment above, so without this reindex it would leak into the
+    # search string (confirmed in practice: search_this came out as
+    # ":TMP:2 m above ground:anl:304538232.0" instead of stopping at "anl:").
+    df = df.reindex(columns=[
+        "grib_message", "start_byte", "end_byte", "reference_time",
+        "variable", "level", "forecast_time", "?", "??", "???",
+    ])
+    df = df.dropna(how="all", axis=1)
+    df["search_this"] = (
+        df.loc[:, "variable":]
+        .astype(str)
+        .apply(lambda x: ":" + ":".join(x).rstrip(":").replace(":nan:", ":"), axis=1)
+    )
+    return df
+
+
 def extract_from_local_archive(
     archive_file: Path,
     herbie_date: pd.Timestamp,
@@ -128,16 +171,20 @@ def extract_from_local_archive(
     """Extract one variable's message(s) for one (date, hour, fxx) directly
     out of an already-downloaded full grib2 file, instead of downloading a
     byte-range subset over HTTP - skips the network data transfer entirely
-    (the full file, hundreds of MB, already sits on local disk). Still uses
-    Herbie's own .inventory() to find the right byte range: a tiny (KB)
-    remote request for the idx text, not the actual grib data, so this
-    isn't a fully offline path, but it reuses Herbie's already-correct idx
-    parsing/search-string matching rather than reimplementing it.
+    (the full file, hundreds of MB, already sits on local disk).
+
+    Finds the message's byte range from a local .idx sidecar next to
+    archive_file if one exists (see _parse_local_idx - zero network
+    requests), otherwise falls back to Herbie's own .inventory() (a tiny
+    (KB) remote request for the idx text, not the actual grib data).
+    Either way this reuses the exact same idx format/search-string
+    matching Herbie itself uses rather than inventing a new one.
 
     Verified against real data (2025-06-01 00z prs t2m): a message
     extracted this way decodes to the exact same site-pixel value as the
     equivalent Herbie network subset download (304.47833 K, byte-identical
-    source range). Opening the *whole* archive file with cfgrib instead of
+    source range) - true for both the local-idx and Herbie-inventory
+    lookup paths. Opening the *whole* archive file with cfgrib instead of
     doing a byte-range single-message extraction was measured ~35-140s/file
     (depends on whether cfgrib's own on-disk idx cache, which this package
     otherwise disables, happens to be reusable) - this function never does
@@ -150,11 +197,16 @@ def extract_from_local_archive(
     never a new way to fail a download that would otherwise have succeeded.
     """
     try:
-        from herbie import Herbie
+        local_idx = Path(f"{archive_file}.idx")
+        if local_idx.exists():
+            idx_df = _parse_local_idx(local_idx)
+            idx_df = idx_df[idx_df["search_this"].str.contains(search_string, regex=True)]
+        else:
+            from herbie import Herbie
 
-        with redirect_stdout_to_file(out_path.parent / "herbie_local_archive.log"):
-            H = Herbie(herbie_date, model="hrrr", product=product, fxx=fxx, verbose=False)
-            idx_df = H.inventory(search_string)
+            with redirect_stdout_to_file(out_path.parent / "herbie_local_archive.log"):
+                H = Herbie(herbie_date, model="hrrr", product=product, fxx=fxx, verbose=False)
+                idx_df = H.inventory(search_string)
         if idx_df.empty:
             return False
 

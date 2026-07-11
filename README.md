@@ -364,15 +364,32 @@ download:
                                           # if yours differs)
 ```
 
-For each variable, this still does one small (KB-sized) network request to
-Herbie's `.inventory()` to find that variable's exact byte offset within
-the archive file (reusing Herbie's own idx parsing/search-string matching
-rather than reimplementing it) - it just reads the actual variable bytes
-from the local file (a `seek()`+`read()`) instead of downloading them.
-Anything the archive doesn't cover (wrong date, wrong fxx, file missing)
-transparently falls back to the normal network download - `local_archive_dir`
-is best-effort and can never make a download that would have otherwise
-succeeded fail instead.
+For each variable, this needs to find that variable's exact byte offset
+within the archive file - two ways, tried in this order:
+
+1. **Local .idx sidecar** (zero network requests): if `<archive_file>.idx`
+   exists next to the grib2 file - the plain-text NOAA/wgrib2-style index,
+   *not* cfgrib's own on-disk cache format - `_parse_local_idx()` parses it
+   directly, mirroring Herbie's own idx-parsing/search-string matching
+   exactly so the same `search_patterns` strings work unchanged. Get these
+   sidecar files by downloading them alongside the grib2 (see e.g. this
+   package's sibling `01_download_from_aws.py`, which fetches
+   `<file>.idx` right after `<file>` on every new download) or backfill
+   them for an archive that predates that (a small script that reconstructs
+   each file's S3 key and downloads just the missing `.idx`, e.g. this
+   package's sibling `backfill_idx.py` - the idx files are tiny, tens of KB
+   each, nothing like re-downloading the grib2 itself).
+2. **Herbie's `.inventory()`** (fallback, one small KB-sized network
+   request per variable): used automatically whenever no local `.idx` is
+   present, so `local_archive_dir` works immediately even before you've
+   backfilled sidecars for it.
+
+Either way, only the actual variable bytes are read from the local archive
+file (a `seek()`+`read()`) - never downloaded over the network. Anything
+the archive doesn't cover (wrong date, wrong fxx, file missing) transparently
+falls back to a normal network download of the byte-range subset -
+`local_archive_dir` is best-effort and can never make a download that
+would have otherwise succeeded fail instead.
 
 Do **not** point this at opening the whole archive file with `cfgrib`
 yourself expecting a speedup - measured ~35-140s just to open one ~400MB
