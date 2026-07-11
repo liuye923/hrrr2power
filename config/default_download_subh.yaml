@@ -2,9 +2,13 @@
 # download-subh CLI (standalone) and extract-site's auto-download step.
 #
 # A site-extraction config's own "download:" section can override any of
-# save_dir/init_hours/fxx/workers/retries/retry_wait/overwrite. search_patterns
-# is always sourced from here (referenced by name, not redefined per site)
-# so there is a single place that knows how to download each variable.
+# save_dir/init_hours/workers/retries/retry_wait/overwrite. fxx is the one
+# exception - override it via a top-level "fxx" key in the site-extraction
+# config (alongside "product"), not nested under "download:", since it picks
+# a lead time/product variant rather than a download mechanic.
+# search_patterns is always sourced from here (referenced by name, not
+# redefined per site) so there is a single place that knows how to download
+# each variable.
 
 save_dir: /global/cfs/projectdirs/m1657/liuy351/DATA/HRRR/download_fastheribie/15min_grib2
 

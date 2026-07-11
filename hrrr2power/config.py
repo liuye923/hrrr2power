@@ -26,6 +26,27 @@ def resolve_days(cfg: dict) -> list[pd.Timestamp]:
     return sorted(set(d.normalize() for d in days))
 
 
+def resolve_download_cfg(config: dict) -> dict:
+    """Build the local_cfg dict for resolve_download_settings out of a
+    site-extraction config, folding in a top-level "fxx" override.
+
+    fxx picks a product variant/lead-time (like the top-level "product" key),
+    not a download mechanic - so extract-site configs set it at the top
+    level rather than nested under "download:", which stays reserved for
+    download-mechanics settings (workers/retries/retry_wait/overwrite/
+    configure_file). A top-level fxx wins over a legacy download.fxx if both
+    are somehow present; either way it must land in the returned dict so
+    both the download step (hrrr2power.extract.ensure_downloaded) and any
+    caller resolving fxx for its own purposes (e.g. extract-site picking
+    which fxx's filenames to glob for) agree on the same value.
+    """
+    dl_cfg = dict(config.get("download", {}))
+    fxx = config.get("fxx", dl_cfg.get("fxx"))
+    if fxx is not None:
+        dl_cfg["fxx"] = fxx
+    return dl_cfg
+
+
 def resolve_download_settings(
     local_cfg: dict,
     variable_names: list[str] | None = None,

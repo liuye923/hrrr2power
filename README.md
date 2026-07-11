@@ -10,8 +10,12 @@ in generic top-level modules
 `hrrr2power.inventory`); each product subpackage (`hrrr2power.subh`,
 `hrrr2power.prs`) is a thin wrapper that just supplies its own defaults
 (forecast hour, expected message count, filename convention) - all
-overridable per-run via a config's `fxx` key. Adding a third product means
-adding another thin subpackage, not touching the generic code.
+overridable per-run via a top-level `fxx` key (a bare int or a list, e.g.
+`fxx: [0, 6, 12]`) in either a standalone download config or a site-extraction
+config; it sits alongside `product`, not nested under `download:`, since it
+picks a product variant/lead-time rather than a download mechanic like
+`workers`/`retries`. Adding a third product means adding another thin
+subpackage, not touching the generic code.
 
 ## Features
 
@@ -65,7 +69,8 @@ scripts/
   pyproject.toml
   hrrr2power/
     __init__.py
-    config.py           # generic: load_yaml, resolve_days, resolve_download_settings (incl. fxx resolution)
+    config.py           # generic: load_yaml, resolve_days, resolve_download_cfg (folds a config's
+                         # top-level "fxx" into its download settings), resolve_download_settings
     grid.py              # generic: nearest-grid-point lookup, works with any cfgrib file
     combine.py            # generic: stitches cfgrib's disjoint message groups back together
                            # (no-ops when a product never splits, e.g. prs)
@@ -246,6 +251,9 @@ changes):
 ```yaml
 # config/site_Southern_Co_prs.yaml
 product: prs
+fxx: 0   # optional - omit for the default (F00 analysis); a bare int or a
+         # list (fxx: [0, 6, 12]) both work; lives at the top level
+         # alongside "product", not nested under "download:"
 
 site_locations_file: /path/to/site_locations.csv
 grib_dir: /path/to/hourly_grib2
@@ -368,9 +376,9 @@ way).
 - Only `fxx=1` carries the 15-minute sub-hourly steps (`+0:15/+0:30/+0:45/+1:00`);
   `fxx=0` is a single-timestep analysis despite the "subh" name. `fxx=1` is
   subh's default and the only value worth using in practice, but it is a
-  regular config-resolved value (see `download.fxx` in
-  `default_download_subh.yaml`), not hardcoded - override it if you know
-  what you're doing.
+  regular config-resolved value (see `fxx` in `default_download_subh.yaml`,
+  or override it via a top-level `fxx` key in a site-extraction config), not
+  hardcoded - override it if you know what you're doing.
 - Each downloaded variable file already contains all 4 sub-hourly steps -
   Herbie's byte-range search matches the variable's messages across all 4
   time blocks in one call, so there's one file per (date, hour, variable),
@@ -385,8 +393,10 @@ way).
 
 - Defaults to `fxx=0` (the F00 analysis field), but unlike subh, `prs`
   genuinely serves real forecast lead times and this package can fetch
-  them - set `download.fxx` in the config to an int (`fxx: 6`) or a list
-  (`fxx: [0, 6, 12]`) to download other/multiple lead times in one run.
+  them - set a top-level `fxx` key to an int (`fxx: 6`) or a list
+  (`fxx: [0, 6, 12]`) to download other/multiple lead times in one run
+  (standalone `download-prs` configs and site-extraction configs both use
+  this same top-level key, not nested under `download:`).
   `extract-site` still targets exactly one fxx per run even if several were
   downloaded (it uses the first value and prints a note if more than one is
   configured), since grouping sibling files by (date, hour) alone would be

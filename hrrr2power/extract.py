@@ -15,7 +15,7 @@ import pandas as pd
 import xarray as xr
 
 from hrrr2power.combine import combine_named_arrays
-from hrrr2power.config import resolve_days
+from hrrr2power.config import resolve_days, resolve_download_cfg
 
 CFGRIB_KWARGS = {
     "decode_times": True,
@@ -82,7 +82,7 @@ def ensure_downloaded(
     resolve_download_settings_fn/download_range_fn are the calling
     product's own bound functions (see e.g. hrrr2power.subh.extract).
     """
-    dl_cfg = config.get("download", {})
+    dl_cfg = resolve_download_cfg(config)
     variable_names = collect_variable_names(config)
     settings = resolve_download_settings_fn(dl_cfg, variable_names=variable_names)
     if workers is not None:

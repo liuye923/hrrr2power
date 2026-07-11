@@ -42,7 +42,7 @@ from pathlib import Path
 import pandas as pd
 from tqdm import tqdm
 
-from hrrr2power.config import load_yaml, resolve_days
+from hrrr2power.config import load_yaml, resolve_days, resolve_download_cfg
 from hrrr2power.grid import generate_grid_indices
 
 
@@ -76,17 +76,21 @@ def main() -> None:
     process_one = product.process_one
 
     # Resolve fxx once regardless of --skip-download, so discover_groups
-    # knows which lead time's filenames to look for. Downloading can fetch
-    # several fxx values in one run (see resolve_download_settings's "fxx"
-    # key), but extraction targets exactly one per run - grouping sibling
-    # files by (date, hour) alone would be ambiguous if more than one
-    # lead time's file could match the same slot.
-    dl_cfg = config.get("download", {})
+    # knows which lead time's filenames to look for. Set as a top-level
+    # "fxx" key (like "product") rather than nested under "download:", since
+    # it picks a product variant/lead-time rather than a download mechanic -
+    # resolve_download_cfg folds it into the download settings so the actual
+    # download step (ensure_downloaded, below) agrees with this. Downloading
+    # can fetch several fxx values in one run (e.g. fxx: [0, 6, 12]), but
+    # extraction targets exactly one per run - grouping sibling files by
+    # (date, hour) alone would be ambiguous if more than one lead time's
+    # file could match the same slot.
+    dl_cfg = resolve_download_cfg(config)
     variable_names = product.collect_variable_names(config)
     resolved_fxx = product.resolve_download_settings(dl_cfg, variable_names=variable_names)["fxx"]
     fxx = resolved_fxx[0]
     if len(resolved_fxx) > 1:
-        print(f"Note: download.fxx has {len(resolved_fxx)} values {resolved_fxx} - "
+        print(f"Note: fxx has {len(resolved_fxx)} values {resolved_fxx} - "
               f"extracting only fxx={fxx} (the first).")
 
     if not args.skip_download:
