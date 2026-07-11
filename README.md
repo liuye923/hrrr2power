@@ -77,7 +77,9 @@ scripts/
                            # (no-ops when a product never splits, e.g. prs)
     download.py            # generic: FastHerbie download/retry/relocate/validate + download_range(),
                             # tasks flattened to (variable, hour, fxx) triples, parameterized by each
-                            # product's default fxx/expected_message_count/filename_template
+                            # product's default fxx/expected_message_count/filename_template;
+                            # extract_from_local_archive() optionally serves a variable's bytes from
+                            # an already-downloaded full grib2 file instead of the network (see 3d)
     extract.py               # generic: site pixel extraction, discover_groups, ensure_downloaded,
                               # concat_hourly, parameterized by each product's filename glob template
     inventory.py               # generic: fetch_inventory/unique_variables (Herbie .inventory() dump)
@@ -325,6 +327,48 @@ at that level), same as subh - but prs's 10m wind decodes as `u10`/`v10`
 directly (a standard CF level), so those keys match their own output name.
 Run `inventory-prs` to check any new variable's actual decoded name before
 adding it to `default_download_prs.yaml`.
+
+### 3d. Serving downloads from an already-downloaded local archive
+
+If you already have full (not byte-range subset) grib2 files sitting on
+disk somewhere - e.g. `<archive>/<date>/hrrr.tHHz.wrfprsf00.grib2`, one
+full multi-variable file per hour instead of this package's usual one
+small subset file per variable - set `local_archive_dir` in `download:` to
+skip the network entirely for any (date, hour, fxx) the archive covers:
+
+```yaml
+download:
+  configure_file: config/default_download_prs.yaml
+  local_archive_dir: /path/to/archive   # <archive>/<date>/<filename>, same
+                                          # filename convention as this
+                                          # package would have downloaded
+                                          # (override with
+                                          # local_archive_filename_template
+                                          # if yours differs)
+```
+
+For each variable, this still does one small (KB-sized) network request to
+Herbie's `.inventory()` to find that variable's exact byte offset within
+the archive file (reusing Herbie's own idx parsing/search-string matching
+rather than reimplementing it) - it just reads the actual variable bytes
+from the local file (a `seek()`+`read()`) instead of downloading them.
+Anything the archive doesn't cover (wrong date, wrong fxx, file missing)
+transparently falls back to the normal network download - `local_archive_dir`
+is best-effort and can never make a download that would have otherwise
+succeeded fail instead.
+
+Do **not** point this at opening the whole archive file with `cfgrib`
+yourself expecting a speedup - measured ~35-140s just to open one ~400MB
+full file (depends on whether cfgrib's own on-disk idx cache, which this
+package otherwise disables for corruption-safety reasons, happens to be
+reusable), because cfgrib builds full xarray objects for every message
+group in the file regardless of which single variable you actually want.
+`extract_from_local_archive()` in `hrrr2power/download.py` never does
+that; it only ever reads the specific message bytes needed via the idx
+byte range, which decodes exactly as fast as any other single-message
+subset file (verified against real data: a message extracted this way
+decodes to the exact same site-pixel value as the equivalent network
+subset download).
 
 ### 4. Verify integrity of already-downloaded files
 

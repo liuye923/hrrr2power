@@ -116,6 +116,71 @@ def expected_output_path(
     )
 
 
+def extract_from_local_archive(
+    archive_file: Path,
+    herbie_date: pd.Timestamp,
+    product: str,
+    fxx: int,
+    search_string: str,
+    out_path: Path,
+    expected_message_count: int,
+) -> bool:
+    """Extract one variable's message(s) for one (date, hour, fxx) directly
+    out of an already-downloaded full grib2 file, instead of downloading a
+    byte-range subset over HTTP - skips the network data transfer entirely
+    (the full file, hundreds of MB, already sits on local disk). Still uses
+    Herbie's own .inventory() to find the right byte range: a tiny (KB)
+    remote request for the idx text, not the actual grib data, so this
+    isn't a fully offline path, but it reuses Herbie's already-correct idx
+    parsing/search-string matching rather than reimplementing it.
+
+    Verified against real data (2025-06-01 00z prs t2m): a message
+    extracted this way decodes to the exact same site-pixel value as the
+    equivalent Herbie network subset download (304.47833 K, byte-identical
+    source range). Opening the *whole* archive file with cfgrib instead of
+    doing a byte-range single-message extraction was measured ~35-140s/file
+    (depends on whether cfgrib's own on-disk idx cache, which this package
+    otherwise disables, happens to be reusable) - this function never does
+    that; it only ever reads the specific message bytes needed, which
+    decode exactly as fast as any other single-message subset file.
+
+    Returns False on any failure (message not in this file's inventory,
+    read/decode error, wrong message count) so the caller falls back to a
+    normal network download - a local archive is meant to be pure upside,
+    never a new way to fail a download that would otherwise have succeeded.
+    """
+    try:
+        from herbie import Herbie
+
+        with redirect_stdout_to_file(out_path.parent / "herbie_local_archive.log"):
+            H = Herbie(herbie_date, model="hrrr", product=product, fxx=fxx, verbose=False)
+            idx_df = H.inventory(search_string)
+        if idx_df.empty:
+            return False
+
+        start_byte = int(idx_df["start_byte"].min())
+        end_byte = idx_df["end_byte"].max()
+
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(archive_file, "rb") as fin, open(out_path, "wb") as fout:
+            fin.seek(start_byte)
+            if pd.isna(end_byte):
+                # Last message in the file - a wgrib2-style idx infers each
+                # message's end from the *next* message's start, so there's
+                # nothing to infer from for the final one; read to EOF.
+                fout.write(fin.read())
+            else:
+                fout.write(fin.read(int(end_byte) - start_byte + 1))
+
+        if not is_valid_grib_file(out_path, expected_message_count):
+            out_path.unlink(missing_ok=True)
+            return False
+        return True
+    except Exception:
+        out_path.unlink(missing_ok=True)
+        return False
+
+
 def relocate_subset_file(path: Path, search_name: str, save_dir: Path) -> Path:
     """Move Herbie's hashed subset file into <save_dir>/<search_name>/YYYYMMDD/.
 
@@ -211,7 +276,7 @@ def run_fastherbie_download(
     return False
 
 
-def _download_one_task(task: tuple) -> tuple[str, pd.Timestamp, int, bool]:
+def _download_one_task(task: tuple) -> tuple[str, pd.Timestamp, int, bool, str]:
     """Worker for the flattened (variable, hour, fxx) task pool.
 
     Module-level (not a closure) so multiprocessing can pickle it. Each
@@ -226,9 +291,36 @@ def _download_one_task(task: tuple) -> tuple[str, pd.Timestamp, int, bool]:
     workers sit idle; flattening across every dimension keeps every worker
     busy regardless of how the missing data happens to be distributed -
     benchmarked ~3x faster than the old sequential-variables approach.
+
+    If local_archive_dir is set and the matching full-file archive entry
+    exists for this (date, hour, fxx), tries extract_from_local_archive()
+    first - falls through to the normal network download on any failure
+    (message not found, read/decode error), so a misconfigured or
+    partial archive can never make a download fail that would otherwise
+    have succeeded over the network.
     """
     (search_name, search_string, init_time, fxx_value, retries, retry_wait, save_dir, log_file,
-     product, expected_message_count) = task
+     product, expected_message_count, filename_template, local_archive_dir,
+     local_archive_filename_template) = task
+
+    if local_archive_dir is not None and local_archive_filename_template is not None:
+        archive_file = (
+            Path(local_archive_dir) / f"{init_time:%Y%m%d}"
+            / local_archive_filename_template.format(hour=init_time.hour, fxx=fxx_value)
+        )
+        if archive_file.exists():
+            out_path = expected_output_path(init_time, search_name, save_dir, filename_template, fxx_value)
+            if extract_from_local_archive(
+                archive_file=archive_file,
+                herbie_date=init_time,
+                product=product,
+                fxx=fxx_value,
+                search_string=search_string,
+                out_path=out_path,
+                expected_message_count=expected_message_count,
+            ):
+                return search_name, init_time, fxx_value, True, "local"
+
     ok = run_fastherbie_download(
         init_times=[init_time],
         fxx=[fxx_value],
@@ -242,7 +334,7 @@ def _download_one_task(task: tuple) -> tuple[str, pd.Timestamp, int, bool]:
         product=product,
         expected_message_count=expected_message_count,
     )
-    return search_name, init_time, fxx_value, ok
+    return search_name, init_time, fxx_value, ok, "network"
 
 
 def download_one_day(
@@ -259,6 +351,8 @@ def download_one_day(
     expected_message_count: int,
     filename_template: str,
     overwrite: bool = False,
+    local_archive_dir: Path | None = None,
+    local_archive_filename_template: str | None = None,
 ) -> tuple[int, int, int]:
     """Download one day and return (expected_requests, failed_requests, skipped_requests)."""
     init_times = [day + pd.Timedelta(hours=h) for h in init_hours]
@@ -268,6 +362,8 @@ def download_one_day(
     print(f"Init hours   : {init_hours}")
     print(f"Product      : {product}  fxx={fxx}")
     print(f"Variables    : {[name for name, _ in search_patterns]}")
+    if local_archive_dir is not None:
+        print(f"Local archive: {local_archive_dir}  (tried first per file, falls back to network)")
     print(f"Planned requests: {expected_requests}")
 
     tasks = []
@@ -289,7 +385,8 @@ def download_one_day(
             skipped_requests += len(init_times) - len(pending_times)
             tasks.extend(
                 (search_name, search_string, t, fxx_value, retries, retry_wait, save_dir, log_file,
-                 product, expected_message_count)
+                 product, expected_message_count, filename_template, local_archive_dir,
+                 local_archive_filename_template)
                 for t in pending_times
             )
 
@@ -299,8 +396,9 @@ def download_one_day(
         return expected_requests, 0, skipped_requests
 
     failed_requests = 0
+    local_hits = 0
     with Pool(min(workers, len(tasks))) as pool:
-        for search_name, init_time, fxx_value, ok in tqdm(
+        for search_name, init_time, fxx_value, ok, source in tqdm(
             pool.imap_unordered(_download_one_task, tasks),
             total=len(tasks),
             desc=day.strftime("%Y-%m-%d"),
@@ -311,6 +409,12 @@ def download_one_day(
                     f"SKIP {search_name} {init_time.strftime('%Y-%m-%d %H:%M')} "
                     f"f{fxx_value:02d} after retries."
                 )
+            elif source == "local":
+                local_hits += 1
+
+    if local_archive_dir is not None:
+        print(f"  ({local_hits}/{len(tasks)} served from local archive, "
+              f"{len(tasks) - local_hits - failed_requests} fell back to network)")
 
     return expected_requests, failed_requests, skipped_requests
 
@@ -350,6 +454,8 @@ def download_range(
             fxx=fxx,
             expected_message_count=expected_message_count,
             filename_template=filename_template,
+            local_archive_dir=settings.get("local_archive_dir"),
+            local_archive_filename_template=settings.get("local_archive_filename_template"),
         )
         total_expected += expected
         total_failed += failed

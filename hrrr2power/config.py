@@ -52,6 +52,7 @@ def resolve_download_settings(
     variable_names: list[str] | None = None,
     default_config_file: Path | None = None,
     default_fxx: list[int] | None = None,
+    default_local_archive_filename_template: str | None = None,
 ) -> dict:
     """Merge a local config's overrides on top of its configure_file base.
 
@@ -59,8 +60,9 @@ def resolve_download_settings(
     yaml (default: default_config_file, a per-product base config passed by
     the caller - e.g. hrrr2power.subh.config's own default_download_subh.yaml),
     plus any of save_dir/init_hours/workers/retries/retry_wait/overwrite/
-    fxx/variables to override. search_patterns always come from the base
-    file, looked up by name - never redefined in local_cfg.
+    fxx/variables/local_archive_dir/local_archive_filename_template to
+    override. search_patterns always come from the base file, looked up by
+    name - never redefined in local_cfg.
 
     variable_names, if given, overrides local_cfg's own "variables" key
     (used by the extract CLI, which derives the variable list from its
@@ -70,6 +72,20 @@ def resolve_download_settings(
     calling product's own default, e.g. hrrr2power.subh.download.FXX) - a
     bare int in yaml (`fxx: 6`) is normalized to a 1-item list, matching the
     list[int] FastHerbie itself expects.
+
+    local_archive_dir (default: unset - local-archive reads are opt-in)
+    points at a directory of already-downloaded full (not byte-range
+    subset) grib2 files, laid out <local_archive_dir>/<date>/<filename>.
+    When set, the download step tries extracting each variable directly
+    from the matching local file (via an idx-derived byte range - see
+    hrrr2power.download.extract_from_local_archive) before falling back to
+    a normal network download - see extract_from_local_archive for why this
+    is strictly opt-in, best-effort, and safe to leave unset.
+    local_archive_filename_template resolves like fxx (local_cfg, then
+    base, then default_local_archive_filename_template, the calling
+    product's own FILENAME_TEMPLATE) since a local archive typically
+    follows the same naming convention as what this package would have
+    downloaded anyway.
     """
     base_file = Path(local_cfg.get("configure_file", default_config_file))
     base = load_yaml(base_file)
@@ -88,6 +104,11 @@ def resolve_download_settings(
     fxx = local_cfg.get("fxx", base.get("fxx", default_fxx))
     if isinstance(fxx, int):
         fxx = [fxx]
+    local_archive_dir = local_cfg.get("local_archive_dir", base.get("local_archive_dir"))
+    local_archive_filename_template = local_cfg.get(
+        "local_archive_filename_template",
+        base.get("local_archive_filename_template", default_local_archive_filename_template),
+    )
 
     return {
         "save_dir": Path(local_cfg.get("save_dir", base["save_dir"])),
@@ -102,4 +123,6 @@ def resolve_download_settings(
         # forces it to match grib_dir) after this function returns.
         "log_file": Path(log_file) if log_file else None,
         "search_patterns": [(name, all_patterns[name]) for name in variable_names],
+        "local_archive_dir": Path(local_archive_dir) if local_archive_dir else None,
+        "local_archive_filename_template": local_archive_filename_template,
     }

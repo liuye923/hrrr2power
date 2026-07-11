@@ -32,6 +32,18 @@ retries: 3
 retry_wait: 5.0
 overwrite: false
 
+# Optional: a directory of already-downloaded FULL (not byte-range subset)
+# grib2 files, laid out <local_archive_dir>/<date>/hrrr.tHHz.wrfprsfNN.grib2
+# - same naming convention this package downloads, just one full file per
+# hour instead of one subset file per variable. When set, each variable's
+# download is tried against this archive first (extracts just that
+# variable's bytes via an idx-derived byte range, no full-file read/network
+# transfer) before falling back to a normal network download - safe to set
+# even if the archive only covers *some* of the requested date range/fxx
+# values, since anything not found there is fetched over the network as
+# usual. Uncomment and point at your own archive:
+# local_archive_dir: /global/cfs/projectdirs/m1657/liuy351/DATA/HRRR/grib2/pressure
+
 # One entry per downloadable variable. Each name becomes its own download
 # group/folder: <save_dir>/<name>/YYYYMMDD/hrrr.tHHz.wrfprsfNN.grib2
 # Run `inventory-prs` to discover more variables/patterns.
