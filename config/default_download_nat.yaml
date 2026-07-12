@@ -49,6 +49,25 @@ overwrite: false
 # One entry per downloadable variable. Each name becomes its own download
 # group/folder: <save_dir>/<name>/YYYYMMDD/hrrr.tHHz.wrfnatfNN.grib2
 # Run `inventory-nat` to discover more variables/patterns.
+#
+# A search_patterns entry can also be a dict {pattern, message_count}
+# instead of a plain string, for a variable whose pattern matches more
+# than one grib message per file - see u_hybrid/v_hybrid below.
+# message_count must be the exact number of messages the pattern matches
+# (confirmed via hrrr2power.download.count_matching_messages) - it's how
+# is_valid_grib_file's integrity check knows a download is complete, and
+# how the local-archive byte-range read groups contiguous messages
+# correctly (see hrrr2power.download.extract_from_local_archive).
+#
+# NOTE: download-nat's standalone CLI downloads *every* search_patterns
+# entry below if a run config omits its own "variables:" key - u_hybrid/
+# v_hybrid are much larger than the rest (50 levels vs a single
+# near-surface level per variable), so an existing download-nat run
+# config relying on that default will now also start fetching them. Set
+# an explicit "variables:" list in such a config if you don't want that.
+# extract-site/extract-region are unaffected either way, since they
+# always pass an explicit variable list derived from their own
+# "variables:" block.
 search_patterns:
   t2m:  ":TMP:2 m above ground:"
   d2m:  ":DPT:2 m above ground:"
@@ -57,3 +76,17 @@ search_patterns:
   u10:  ":UGRD:10 m above ground:"
   v10:  ":VGRD:10 m above ground:"
   psfc: ":PRES:surface:"
+
+  # Multi-level (all 50 hybrid/model levels at once, decoded by cfgrib as
+  # a single variable with an extra "hybrid" dimension) - confirmed via
+  # hrrr2power.download.count_matching_messages against hrrr.20250601:
+  # UGRD/VGRD each match exactly 50 messages. nat's native vertical
+  # coordinate is hybrid model levels, not pressure - unlike prs, there
+  # is no "mb" pressure-level data here (see "Notes on HRRR nat" in the
+  # README for what nat vs prs each carry).
+  u_hybrid:
+    pattern: ':UGRD:\d+ hybrid level:'
+    message_count: 50
+  v_hybrid:
+    pattern: ':VGRD:\d+ hybrid level:'
+    message_count: 50
