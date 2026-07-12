@@ -16,6 +16,7 @@ time).
 """
 
 import time
+import warnings
 from multiprocessing import Pool
 from pathlib import Path
 from typing import Any, cast
@@ -159,6 +160,21 @@ def _parse_local_idx(idx_path: Path) -> pd.DataFrame:
     return df
 
 
+def _search_this_matches(idx_df: pd.DataFrame, search_string: str) -> pd.Series:
+    """idx_df["search_this"].str.contains(search_string, regex=True), with
+    pandas' "this pattern has match groups, use str.extract" warning
+    suppressed - it only applies if you wanted the captured groups
+    themselves, which every caller here doesn't (only True/False matching
+    matters). Search patterns aren't guaranteed capture-group-free (e.g. a
+    wildcard level regex like r":UGRD:\\d+(\\.\\d+)? mb:"), and this
+    warning fires on every single call, which floods the console across a
+    multi-day/multi-variable run (confirmed in practice).
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return idx_df["search_this"].str.contains(search_string, regex=True)
+
+
 def count_matching_messages(
     sample_date: pd.Timestamp,
     product: str,
@@ -183,11 +199,13 @@ def count_matching_messages(
         local_idx = Path(f"{archive_file}.idx")
         if local_idx.exists():
             idx_df = _parse_local_idx(local_idx)
-            return int(idx_df["search_this"].str.contains(search_string, regex=True).sum())
+            return int(_search_this_matches(idx_df, search_string).sum())
 
     from herbie import Herbie
     H = Herbie(sample_date, model="hrrr", product=product, fxx=fxx, verbose=False)
-    return len(H.inventory(search_string))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return len(H.inventory(search_string))
 
 
 def extract_from_local_archive(
@@ -236,12 +254,14 @@ def extract_from_local_archive(
         local_idx = Path(f"{archive_file}.idx")
         if local_idx.exists():
             idx_df = _parse_local_idx(local_idx)
-            idx_df = idx_df[idx_df["search_this"].str.contains(search_string, regex=True)]
+            idx_df = idx_df[_search_this_matches(idx_df, search_string)]
             method = "local_idx"
         else:
             from herbie import Herbie
 
-            with redirect_stdout_to_file(out_path.parent / "herbie_local_archive.log"):
+            with redirect_stdout_to_file(out_path.parent / "herbie_local_archive.log"), \
+                 warnings.catch_warnings():
+                warnings.simplefilter("ignore")
                 H = Herbie(herbie_date, model="hrrr", product=product, fxx=fxx, verbose=False)
                 idx_df = H.inventory(search_string)
             method = "local_inventory"

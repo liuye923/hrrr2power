@@ -45,8 +45,11 @@ local_archive_dir: /global/cfs/projectdirs/m1657/liuy351/DATA/HRRR/grib2/pressur
 
 search_patterns:
   u_plev:
-    pattern: ':UGRD:\d+(\.\d+)? mb:'
+    # Non-capturing group (?:...) - a capturing group here makes pandas'
+    # str.contains(regex=True) print a "has match groups" warning on every
+    # single call (confirmed in practice: one warning per task, 48/day).
+    pattern: ':UGRD:\d+(?:\.\d+)? mb:'
     message_count: 40
   v_plev:
-    pattern: ':VGRD:\d+(\.\d+)? mb:'
+    pattern: ':VGRD:\d+(?:\.\d+)? mb:'
     message_count: 40
