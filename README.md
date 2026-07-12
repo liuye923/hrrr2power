@@ -82,8 +82,10 @@ scripts/
                             # product's default fxx/expected_message_count/filename_template;
                             # extract_from_local_archive() optionally serves a variable's bytes from
                             # an already-downloaded full grib2 file instead of the network (see 3d)
-    extract.py               # generic: site pixel extraction, discover_groups, ensure_downloaded,
-                              # concat_hourly, parameterized by each product's filename glob template
+    extract.py               # generic: site pixel extraction (extract_site_data/process_one/
+                              # concat_hourly) and region-crop extraction (extract_region_data/
+                              # process_one_region/concat_hourly_region), discover_groups,
+                              # ensure_downloaded - parameterized by each product's filename glob template
     inventory.py               # generic: fetch_inventory/unique_variables (Herbie .inventory() dump)
     subh/                        # HRRR subh (subhourly) product - thin bindings only
       config.py                    # pins DEFAULT_CONFIG_FILE + default_fxx=[1], calls the generic resolver
@@ -101,6 +103,8 @@ scripts/
       download_nat.py          # entry point for `download-nat`
       extract_site.py            # entry point for `extract-site` - single command for any product,
                                   # dispatches on the config's `product:` key (default "subh")
+      extract_region.py            # entry point for `extract-region` - lat/lon bounding-box crop
+                                    # instead of site points, same product dispatch as extract-site
       inventory_subh.py            # entry point for `inventory-subh`
       inventory_prs.py               # entry point for `inventory-prs`
       inventory_nat.py                 # entry point for `inventory-nat`
@@ -403,6 +407,67 @@ byte range, which decodes exactly as fast as any other single-message
 subset file (verified against real data: a message extracted this way
 decodes to the exact same site-pixel value as the equivalent network
 subset download).
+
+### 3e. Extracting a region instead of single sites
+
+`extract-region` crops to a lat/lon bounding box instead of reducing to
+site points - output keeps the native 2D grid (`y`, `x` dims, cropped),
+not a `site` dim. Same product/fxx/download machinery as `extract-site`;
+only the "what to extract" step differs:
+
+```yaml
+# config/region_example.yaml
+product: prs
+fxx: 0
+
+region:
+  min_lat: 30.0
+  max_lat: 38.0
+  min_lon: -103.0
+  max_lon: -96.0
+
+grib_dir: /path/to/hourly_grib2
+output_dir: /path/to/output
+
+processing:
+  start_date: "20250201"
+  end_date: "20250201"
+
+download:
+  configure_file: config/default_download_prs.yaml
+
+variables:
+  heightAboveGround:
+    enabled: true
+    vars: {t2m: t2m, u: u80, v: v80}
+
+options:
+  skip_existing: true
+  concatenate: true
+  keep_hourly: true
+```
+
+```bash
+extract-region --config config/region_example.yaml --workers 8
+```
+
+`min_lon`/`max_lon` may be given in either `-180..180` or `0..360` - both
+get normalized to match HRRR's own `0..360` grid_lon convention before
+comparing. Since HRRR's grid is a curvilinear Lambert conformal
+projection, not lat/lon-aligned, the requested box isn't a perfect
+rectangle in the native `(y, x)` index space - `find_region_indices()`
+(`hrrr2power/grid.py`) returns the *tightest enclosing* index rectangle,
+so the actual cropped extent can overshoot the requested box slightly at
+the corners (confirmed in practice: a `30-38°N, 103-96°W` request cropped
+to `29.86-38.12°N, 103.6-95.86°W`) - mask by lat/lon after cropping if you
+need the box's exact edges. Doesn't handle a box crossing the 0/360 seam
+(not relevant for HRRR's CONUS-only domain).
+
+`concat_hourly_region()` uses the same fast in-memory parallel-load
+concat as site extraction's `concat_hourly()` - fine for a modest region,
+but unlike site data a big box × many variables × a long date range isn't
+guaranteed to fit in memory, so revisit with `concat_hourly_dask()`'s
+approach if you ever push this to a large region.
 
 ### 4. Verify integrity of already-downloaded files
 

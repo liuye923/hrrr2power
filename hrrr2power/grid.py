@@ -87,6 +87,46 @@ def find_surrounding_cells(target_lat, target_lon, grid_lats, grid_lons):
     return cells
 
 
+def find_region_indices(
+    min_lat: float, max_lat: float, min_lon: float, max_lon: float, grid_lats, grid_lons,
+) -> tuple[slice, slice]:
+    """Return (y_slice, x_slice) - the smallest rectangular index range in
+    the native grid that fully covers every point inside the given lat/lon
+    bounding box.
+
+    HRRR's grid is a curvilinear Lambert conformal projection, not
+    lat/lon-aligned, so the exact bounding box isn't a perfect rectangle in
+    (y, x) index space - the returned rectangle is the tightest enclosing
+    one, and its corners may extend a little outside the requested box.
+    That's the standard/expected behavior for cropping a curvilinear grid
+    to a lat/lon region (same tradeoff xesmf/regionmask etc. make), not a
+    bug - if you need the box's exact edges, mask by lat/lon after cropping
+    instead of relying on the index rectangle alone.
+
+    min_lon/max_lon may be given in either -180..180 or 0..360 convention -
+    normalized to grid_lons' own 0..360 convention (which is what HRRR
+    always publishes) before comparing, same reasoning as
+    find_surrounding_cells' longitude handling. Does not handle a box that
+    crosses the 0/360 seam (e.g. wrapping through the Pacific) - HRRR's
+    CONUS domain never does, so this isn't handled.
+    """
+    min_lon360 = min_lon % 360
+    max_lon360 = max_lon % 360
+    mask = (
+        (grid_lats >= min_lat) & (grid_lats <= max_lat)
+        & (grid_lons >= min_lon360) & (grid_lons <= max_lon360)
+    )
+    if not mask.any():
+        raise ValueError(
+            f"No grid points found within lat=[{min_lat},{max_lat}] lon=[{min_lon},{max_lon}] "
+            "- check the bounding box overlaps HRRR's CONUS domain."
+        )
+    y_idx, x_idx = np.where(mask)
+    y_slice = slice(int(y_idx.min()), int(y_idx.max()) + 1)
+    x_slice = slice(int(x_idx.min()), int(x_idx.max()) + 1)
+    return y_slice, x_slice
+
+
 def generate_grid_indices(
     sites: pd.DataFrame, sample_grib: Path, backend_kwargs: dict | None = None, num_cells: int = 1
 ) -> pd.DataFrame:

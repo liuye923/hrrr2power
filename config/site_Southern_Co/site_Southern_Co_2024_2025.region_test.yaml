@@ -1,0 +1,41 @@
+# Test: extract a lat/lon bounding-box region (Texas/Oklahoma panhandle,
+# covering the Wake Wind/Kay Wind/Grant Wind/Salt Fork/Bethel/Cactus Flats
+# cluster of AL_ST sites) instead of single-site pixels.
+
+product: prs
+fxx: 0
+
+region:
+  min_lat: 30.0
+  max_lat: 38.0
+  min_lon: -103.0
+  max_lon: -96.0
+
+grib_dir: /global/cfs/projectdirs/m1657/liuy351/DATA/HRRR/download_fastheribie/grib2_prsf00
+output_dir: /global/cfs/projectdirs/m1657/liuy351/DATA/HRRR/download_fastheribie/sites/southern_co_region_test
+
+processing:
+  start_date: "20250201"
+  end_date: "20250201"
+
+download:
+  configure_file: /global/cfs/projectdirs/m1657/liuy351/DATA/HRRR/download_fastheribie/scripts/config/default_download_prs.yaml
+  workers: 8
+  retries: 3
+  retry_wait: 5.0
+  overwrite: false
+  local_archive_dir: /global/cfs/projectdirs/m1657/liuy351/DATA/HRRR/grib2/pressure
+
+variables:
+  heightAboveGround:
+    enabled: true
+    vars:
+      t2m: t2m
+      u: u80
+      v: v80
+
+options:
+  skip_existing: true
+  compression: false
+  concatenate: true
+  keep_hourly: true

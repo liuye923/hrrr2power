@@ -9,10 +9,13 @@ from hrrr2power.extract import (
     collect_variable_names,  # noqa: F401 - re-exported, product-agnostic
     concat_hourly,  # noqa: F401 - re-exported, product-agnostic
     concat_hourly_dask,  # noqa: F401 - re-exported, product-agnostic
+    concat_hourly_region,  # noqa: F401 - re-exported, product-agnostic
     discover_groups as _generic_discover_groups,
     ensure_downloaded as _generic_ensure_downloaded,
+    extract_region_data,  # noqa: F401 - re-exported, product-agnostic
     extract_site_data,  # noqa: F401 - re-exported, product-agnostic
     process_one,  # noqa: F401 - re-exported, product-agnostic
+    process_one_region,  # noqa: F401 - re-exported, product-agnostic
 )
 
 from .config import resolve_download_settings

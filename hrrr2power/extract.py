@@ -192,6 +192,137 @@ def extract_site_data(files: list[Path], sites: pd.DataFrame, config: dict) -> x
     return combined
 
 
+def extract_region_data(files: list[Path], region: tuple[slice, slice], config: dict) -> xr.Dataset | None:
+    """Open the sibling variable files for one (date, hour) and crop to a
+    lat/lon bounding box's enclosing (y, x) index rectangle - keeps the
+    native 2D grid structure (y, x dims preserved, cropped) instead of
+    reducing to points like extract_site_data does. region is
+    (y_slice, x_slice) - see hrrr2power.grid.find_region_indices.
+    """
+    y_slice, x_slice = region
+    var_arrays = defaultdict(list)
+    reference_time = None
+    variables_config = config.get("variables", {})
+
+    for f in files:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            datasets = cfgrib.open_datasets(str(f), backend_kwargs=CFGRIB_KWARGS)
+
+        for ds in datasets:
+            if reference_time is None:
+                reference_time = ds["time"].values
+
+            first_var = list(ds.data_vars)[0]
+            level_type = ds[first_var].attrs.get("GRIB_typeOfLevel", "unknown")
+            step_type = ds[first_var].attrs.get("GRIB_stepType", "instant")
+            config_key = f"{level_type}_{step_type}" if step_type != "instant" else level_type
+
+            level_config = variables_config.get(config_key, {})
+            if not level_config.get("enabled", False):
+                continue
+
+            vars_config = level_config.get("vars", {})
+            vars_to_extract = [v for v in vars_config if v in ds.data_vars]
+            if not vars_to_extract:
+                continue
+
+            # Plain isel with slices (not fancy/vectorized indexing like
+            # extract_site_data's per-site arrays) - this keeps y/x as real
+            # cropped dimensions, and xarray automatically crops the
+            # dataset's 2D latitude/longitude coordinate fields along with
+            # the data, so the output carries correct per-pixel lat/lon for
+            # the cropped region for free.
+            region_data = ds[vars_to_extract].isel(y=y_slice, x=x_slice)
+            region_data = region_data.rename({v: vars_config[v] for v in vars_to_extract})
+            for name, da in region_data.data_vars.items():
+                var_arrays[name].append(da)
+
+    if not var_arrays:
+        return None
+
+    combined_vars = combine_named_arrays(var_arrays, reference_time)
+    combined = xr.merge(list(combined_vars.values()), compat="override")
+
+    if "time" in combined.coords:
+        combined = combined.drop_vars("time", errors="ignore")
+    if "valid_time" in combined.coords:
+        combined = combined.rename({"valid_time": "time"})
+
+    for var in list(combined.coords) + list(combined.data_vars):
+        combined[var].attrs.pop("dtype", None)
+
+    return combined
+
+
+def process_one_region(
+    task, region: tuple[slice, slice], config: dict, hourly_dir: Path, skip_existing: bool
+):
+    date_str, hour_str, files = task
+    out_file = hourly_dir / f"hrrr_region_{date_str}_{hour_str}z.nc"
+
+    if skip_existing and out_file.exists() and out_file.stat().st_size > 1000:
+        return out_file
+
+    # See process_one's docstring comment for why this must not crash the pool.
+    try:
+        ds = extract_region_data(files, region, config)
+    except Exception as exc:
+        print(f"SKIP {date_str} {hour_str}z: failed to read input file(s): {exc}")
+        return None
+
+    if ds is None:
+        return None
+
+    ds.to_netcdf(out_file)
+
+    try:
+        with xr.open_dataset(out_file):
+            pass
+    except Exception:
+        out_file.unlink(missing_ok=True)
+        return None
+
+    return out_file
+
+
+def concat_hourly_region(hourly_dir: Path, output_dir: Path, config: dict, workers: int = 8):
+    """Concatenate every hourly region-extraction file into one netCDF -
+    same fast in-memory parallel-load approach as concat_hourly(), minus
+    the site_name-specific integrity check (a cropped region has no such
+    concept) and with region-specific filenames.
+
+    Region-extracted data is a crop of the grid, not reduced to points -
+    still small relative to the full domain for a modest bounding box, but
+    can grow large for a big box x many variables x a long date range;
+    unlike concat_hourly's site case this isn't guaranteed to comfortably
+    fit in memory, so this is worth revisiting (e.g. falling back to
+    concat_hourly_dask's approach) if it's ever used for a large region.
+    """
+    files = sorted(hourly_dir.glob("hrrr_region_*.nc"))
+    if not files:
+        print("No hourly files to concatenate.")
+        return
+
+    print(f"Concatenating {len(files)} hourly files...")
+    with Pool(min(max(workers, 1), len(files))) as pool:
+        datasets = pool.map(_load_one_hourly, [str(f) for f in files], chunksize=20)
+
+    ds = xr.concat(datasets, dim="time", coords="minimal", compat="override", data_vars="minimal")
+    ds = ds.sortby("time")
+
+    proc = config.get("processing", {})
+    out_file = output_dir / f"hrrr_region_{proc.get('start_date')}_{proc.get('end_date')}.nc"
+    ds.to_netcdf(out_file)
+    ds.close()
+    print(f"Saved concatenated file -> {out_file}")
+
+    if not config.get("options", {}).get("keep_hourly", True):
+        for f in files:
+            f.unlink()
+        print("Removed hourly files (keep_hourly: false).")
+
+
 def discover_groups(grib_dir: Path, days: list[pd.Timestamp], filename_glob: str):
     """Yield (date_str, hour_str, [sibling files]) for every available hour.
 
