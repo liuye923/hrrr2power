@@ -1,0 +1,78 @@
+# Extract 1-hour HRRR data for AL_ST sites.
+#
+# Genuine 1-hour resolution only exists in wrfprsf00.grib2 (NOT f00, which is
+# a single-timestep analysis field despite the "prsf" name). Each f00 file packs 1-hour steps.
+# Run `inventory-prs` to discover more variables/patterns.
+
+# Tells extract-site to use hrrr2power.prs (fxx=0, 1 message/file,
+# wrfprsf00.grib2 filenames) instead of the default hrrr2power.subh.
+product: nat
+fxx: 0
+
+# Site information
+site_locations_file: /global/cfs/projectdirs/m1657/liuy351/DATA/HRRR/download_fastheribie/scripts/config/site_Southern_Co/site_locations.csv
+
+auto_find_indices: true  # set true to force regenerating site_grid_indices.csv
+num_cells: 4
+
+# Input/Output directories
+# grib_dir layout: <grib_dir>/<group>/YYYYMMDD/hrrr.tHHz.wrfprsf00.grib2
+# <group> is now one folder PER VARIABLE (the rename below), not a combined
+# search group - e.g. u80/YYYYMMDD/... and v80/YYYYMMDD/... are separate
+# downloads, instead of one shared uv80m/ file.
+grib_dir: /global/cfs/projectdirs/m1657/liuy351/DATA/HRRR/download_fastheribie/grib2_natf00
+output_dir: /global/cfs/projectdirs/m1657/liuy351/DATA/HRRR/download_fastheribie/sites/southern_co_natf00
+
+# Processing date/time range
+processing:
+  start_date: "20250101"
+  end_date: "20250131"
+
+# Auto-download settings: extract-site checks which files are missing
+# for the variables/date range below and downloads them before extracting.
+# Skip with --skip-download.
+# configure_file supplies the base settings (init_hours, workers, retries,
+# retry_wait, overwrite, and each variable's search pattern) - anything set
+# here overrides that file, except search patterns which always come from it.
+download:
+  configure_file: /global/cfs/projectdirs/m1657/liuy351/DATA/HRRR/download_fastheribie/scripts/config/default_download_nat.yaml
+  workers: 16
+  retries: 3
+  retry_wait: 5.0
+  overwrite: false
+  # Already-downloaded full grib2 files with a local .idx sidecar - lets
+  # the download step read variable bytes directly off disk instead of
+  # downloading them, with zero network requests when the .idx exists
+  # (see hrrr2power README's "Serving downloads from an already-downloaded
+  # local archive" section).
+  local_archive_dir: /global/cfs/projectdirs/m1657/liuy351/DATA/HRRR/grib2/native
+
+# Variables to extract (by GRIB typeOfLevel[_stepType]): {short_name: output_name}.
+# output_name must have a matching entry in default_download_nat.yaml's
+# search_patterns, and also names the per-variable download folder:
+# <grib_dir>/<output_name>/YYYYMMDD/
+variables:
+  heightAboveGround:
+    enabled: true
+    vars:
+      t2m: t2m  # 2m temperature
+      d2m: d2m  # 2m dewpoint
+      u: u80    # 80m U wind - cfgrib names this "u" (no CF short name at 80m), not "u80"
+      v: v80    # 80m V wind - same, cfgrib names this "v"
+      u10: u10  # 10m U wind - cfgrib does name this "u10" (standard CF level)
+      v10: v10  # 10m V wind - cfgrib does name this "v10"
+
+  surface:
+    enabled: true
+    vars:
+      sp: psfc             # surface pressure
+
+# Processing options
+options:
+  skip_existing: true
+  compression: false
+  compression_level: 4
+
+  concatenate: true
+  concat_by: 'period'
+  keep_hourly: true

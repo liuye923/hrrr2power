@@ -38,7 +38,7 @@ def main() -> None:
     print("HRRR subhourly (15-min) download")
     print(f"Config      : {args.config}")
     print(f"Days        : {days[0]:%Y-%m-%d} .. {days[-1]:%Y-%m-%d} ({len(days)} day(s))")
-    print(f"Variables   : {[name for name, _ in settings['search_patterns']]}")
+    print(f"Variables   : {[name for name, _, _ in settings['search_patterns']]}")
     print(f"Init hours  : {settings['init_hours']}")
     print(f"Forecast hrs: {settings['fxx']}  (default fxx=1; subh's sub-hourly steps are only "
           f"meaningful there - override via a 'fxx' key if you know what you're doing)")

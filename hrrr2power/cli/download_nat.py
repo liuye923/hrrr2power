@@ -42,7 +42,7 @@ def main() -> None:
     print("HRRR nat download")
     print(f"Config      : {args.config}")
     print(f"Days        : {days[0]:%Y-%m-%d} .. {days[-1]:%Y-%m-%d} ({len(days)} day(s))")
-    print(f"Variables   : {[name for name, _ in settings['search_patterns']]}")
+    print(f"Variables   : {[name for name, _, _ in settings['search_patterns']]}")
     print(f"Init hours  : {settings['init_hours']}")
     print(f"Forecast hrs: {settings['fxx']}  (default [0], the F00 analysis field; "
           f"override via a 'fxx' key for other lead times)")

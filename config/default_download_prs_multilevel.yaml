@@ -1,0 +1,52 @@
+# Multi-level (all pressure levels) HRRR prs download settings - separate
+# from default_download_prs.yaml since these variables are much larger
+# (~24MB/hour/variable for all 40 levels, vs KB for a single near-surface
+# level) and most site-extraction runs don't want them by default.
+#
+# A site-extraction config's own "download:" section can override any of
+# save_dir/init_hours/workers/retries/retry_wait/overwrite/local_archive_dir.
+# fxx is the one exception - override it via a top-level "fxx" key in the
+# site-extraction config (alongside "product"), not nested under "download:".
+#
+# search_patterns entries can be a plain ":VAR:LEVEL:" string (one message,
+# the common case - see default_download_prs.yaml) or a dict {pattern,
+# message_count} when the pattern matches more than one message per file -
+# a wildcard level regex like below matches all 40 HRRR pressure levels at
+# once, which cfgrib decodes as a single variable with an extra
+# isobaricInhPa dimension rather than 40 separate variables. message_count
+# must be the exact number of messages the pattern matches (confirmed via
+# hrrr2power.download.count_matching_messages - see below) - it's how
+# is_valid_grib_file's integrity check knows a download is complete, and
+# how the local-archive byte-range read groups contiguous messages
+# correctly (see hrrr2power.download.extract_from_local_archive).
+#
+# Confirmed via hrrr2power.download.count_matching_messages against
+# hrrr.20250601: UGRD/VGRD each match exactly 40 messages
+# (50mb..1013.2mb) in prs. Re-verify if HRRR's vertical level set ever
+# changes (unlikely, but the level set isn't guaranteed stable across
+# major model version upgrades).
+
+save_dir: /global/cfs/projectdirs/m1657/liuy351/DATA/HRRR/download_fastheribie/grib2_multilevel
+
+init_hours: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
+
+fxx: 0
+
+workers: 8
+retries: 3
+retry_wait: 5.0
+overwrite: false
+
+# Already-downloaded full grib2 files with a local .idx sidecar - lets the
+# download step read variable bytes directly off disk with zero network
+# requests (see hrrr2power README's "Serving downloads from an
+# already-downloaded local archive" section).
+local_archive_dir: /global/cfs/projectdirs/m1657/liuy351/DATA/HRRR/grib2/pressure
+
+search_patterns:
+  u_plev:
+    pattern: ':UGRD:\d+(\.\d+)? mb:'
+    message_count: 40
+  v_plev:
+    pattern: ':VGRD:\d+(\.\d+)? mb:'
+    message_count: 40

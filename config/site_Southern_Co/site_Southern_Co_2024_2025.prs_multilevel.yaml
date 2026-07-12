@@ -1,0 +1,49 @@
+# Test: extract u/v wind at all 40 HRRR pressure levels (isobaricInhPa,
+# 50mb..1013.2mb) for AL_ST sites - one month. Unlike the other
+# Southern_Co configs (single near-surface level per variable), u_plev/
+# v_plev here each pack all 40 levels into one variable with an extra
+# isobaricInhPa dimension - see config/default_download_prs_multilevel.yaml
+# for how that's declared (message_count per search pattern) and why it
+# needs a separate base config from the regular default_download_prs.yaml.
+
+product: prs
+fxx: 0
+
+site_locations_file: /global/cfs/projectdirs/m1657/liuy351/DATA/HRRR/download_fastheribie/scripts/config/site_Southern_Co/site_locations.csv
+
+auto_find_indices: false
+num_cells: 1
+
+grib_dir: /global/cfs/projectdirs/m1657/liuy351/DATA/HRRR/download_fastheribie/grib2_multilevel
+output_dir: /global/cfs/projectdirs/m1657/liuy351/DATA/HRRR/download_fastheribie/sites/southern_co_prs_multilevel
+
+processing:
+  start_date: "20250201"
+  end_date: "20250228"
+
+download:
+  configure_file: /global/cfs/projectdirs/m1657/liuy351/DATA/HRRR/download_fastheribie/scripts/config/default_download_prs_multilevel.yaml
+  workers: 16
+  retries: 3
+  retry_wait: 5.0
+  overwrite: false
+  local_archive_dir: /global/cfs/projectdirs/m1657/liuy351/DATA/HRRR/grib2/pressure
+
+# isobaricInhPa is the GRIB typeOfLevel cfgrib decodes for pressure-level
+# fields (stepType=instant, so the config key is just the level type, no
+# "_stepType" suffix - see hrrr2power.extract.extract_site_data).
+variables:
+  isobaricInhPa:
+    enabled: true
+    vars:
+      u: u_plev
+      v: v_plev
+
+options:
+  skip_existing: true
+  compression: false
+  compression_level: 4
+
+  concatenate: true
+  concat_by: 'period'
+  keep_hourly: true

@@ -47,6 +47,24 @@ def resolve_download_cfg(config: dict) -> dict:
     return dl_cfg
 
 
+def _normalize_pattern(entry: str | dict) -> tuple[str, int | None]:
+    """A search_patterns entry is either a plain search string (the common
+    case - one grib message, uses the product's own default message count)
+    or a dict {pattern: ..., message_count: N} for a variable whose search
+    string matches more than one message per file (e.g. a wildcard level
+    regex like r":UGRD:\\d+ mb:" matching all 40 HRRR pressure levels at
+    once, decoded by cfgrib as a single variable with an extra level
+    dimension rather than 40 separate ones) - message_count overrides the
+    product-wide default for just that variable, since is_valid_grib_file's
+    integrity check needs to know exactly how many messages *this*
+    variable's file should contain. Get the right number via
+    hrrr2power.download.count_matching_messages rather than guessing.
+    """
+    if isinstance(entry, str):
+        return entry, None
+    return entry["pattern"], entry.get("message_count")
+
+
 def resolve_download_settings(
     local_cfg: dict,
     variable_names: list[str] | None = None,
@@ -122,7 +140,9 @@ def resolve_download_settings(
         # save_dir may still be overridden by the caller (e.g. extract-site
         # forces it to match grib_dir) after this function returns.
         "log_file": Path(log_file) if log_file else None,
-        "search_patterns": [(name, all_patterns[name]) for name in variable_names],
+        "search_patterns": [
+            (name, *_normalize_pattern(all_patterns[name])) for name in variable_names
+        ],
         "local_archive_dir": Path(local_archive_dir) if local_archive_dir else None,
         "local_archive_filename_template": local_archive_filename_template,
     }

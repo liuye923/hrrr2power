@@ -159,6 +159,37 @@ def _parse_local_idx(idx_path: Path) -> pd.DataFrame:
     return df
 
 
+def count_matching_messages(
+    sample_date: pd.Timestamp,
+    product: str,
+    fxx: int,
+    search_string: str,
+    local_archive_dir: Path | None = None,
+    local_archive_filename_template: str | None = None,
+) -> int:
+    """Count how many grib messages a search_string pattern matches for one
+    sample hour - lets a variable's expected message count be computed
+    automatically (e.g. all 40 pressure levels for a wildcard level regex
+    like r":UGRD:\\d+(\\.\\d+)? mb:") instead of needing to be hand-counted
+    and hardcoded per variable. Uses the same local-.idx-first-then-Herbie-
+    .inventory()-fallback lookup as extract_from_local_archive, so it costs
+    zero network requests whenever a local .idx is already available.
+    """
+    if local_archive_dir is not None and local_archive_filename_template is not None:
+        archive_file = (
+            Path(local_archive_dir) / f"{sample_date:%Y%m%d}"
+            / local_archive_filename_template.format(hour=sample_date.hour, fxx=fxx)
+        )
+        local_idx = Path(f"{archive_file}.idx")
+        if local_idx.exists():
+            idx_df = _parse_local_idx(local_idx)
+            return int(idx_df["search_this"].str.contains(search_string, regex=True).sum())
+
+    from herbie import Herbie
+    H = Herbie(sample_date, model="hrrr", product=product, fxx=fxx, verbose=False)
+    return len(H.inventory(search_string))
+
+
 def extract_from_local_archive(
     archive_file: Path,
     herbie_date: pd.Timestamp,
@@ -217,19 +248,39 @@ def extract_from_local_archive(
         if idx_df.empty:
             return None
 
-        start_byte = int(idx_df["start_byte"].min())
-        end_byte = idx_df["end_byte"].max()
+        # A multi-message search_string (e.g. a wildcard level regex
+        # matching all 40 pressure levels) does NOT match contiguous bytes
+        # in the file - HRRR interleaves every variable within each level,
+        # so one variable's messages across levels are scattered throughout
+        # the whole file. A single min-to-max read would pull in every
+        # *other* variable's bytes in between too (confirmed in practice:
+        # 40 non-contiguous U-wind messages spanned 256MB of a 405MB file,
+        # i.e. ~63% of everything else in it), which is not just wasteful
+        # but fails the expected_message_count check outright since the
+        # read would contain hundreds of unrelated messages. Mirror
+        # Herbie's own download() grouping instead (idx_df.grib_message.
+        # diff().ne(1).cumsum()): only messages with strictly consecutive
+        # grib_message numbers are truly adjacent in the file, so group by
+        # that and do one read per contiguous run, concatenating the
+        # results - same as Herbie appending multiple curl calls into one
+        # output file, just via local seeks instead of HTTP ranges.
+        idx_df = idx_df.sort_values("grib_message")
+        groups = idx_df["grib_message"].diff().ne(1).cumsum()
 
         out_path.parent.mkdir(parents=True, exist_ok=True)
         with open(archive_file, "rb") as fin, open(out_path, "wb") as fout:
-            fin.seek(start_byte)
-            if pd.isna(end_byte):
-                # Last message in the file - a wgrib2-style idx infers each
-                # message's end from the *next* message's start, so there's
-                # nothing to infer from for the final one; read to EOF.
-                fout.write(fin.read())
-            else:
-                fout.write(fin.read(int(end_byte) - start_byte + 1))
+            for _, group in idx_df.groupby(groups):
+                start_byte = int(group["start_byte"].min())
+                end_byte = group["end_byte"].max()
+                fin.seek(start_byte)
+                if pd.isna(end_byte):
+                    # Last message in the file - a wgrib2-style idx infers
+                    # each message's end from the *next* message's start,
+                    # so there's nothing to infer from for the final one;
+                    # read to EOF.
+                    fout.write(fin.read())
+                else:
+                    fout.write(fin.read(int(end_byte) - start_byte + 1))
 
         if not is_valid_grib_file(out_path, expected_message_count):
             out_path.unlink(missing_ok=True)
@@ -412,7 +463,7 @@ def download_one_day(
     retries: int,
     retry_wait: float,
     save_dir: Path,
-    search_patterns: list[tuple[str, str]],
+    search_patterns: list[tuple[str, str, int | None]],
     log_file: Path,
     product: str,
     fxx: list[int],
@@ -422,21 +473,30 @@ def download_one_day(
     local_archive_dir: Path | None = None,
     local_archive_filename_template: str | None = None,
 ) -> tuple[int, int, int]:
-    """Download one day and return (expected_requests, failed_requests, skipped_requests)."""
+    """Download one day and return (expected_requests, failed_requests, skipped_requests).
+
+    Each search_patterns entry is (name, search_string, message_count) -
+    message_count is None for the common one-message-per-file case (uses
+    expected_message_count, the product-wide default) or an explicit int
+    for a variable whose search_string matches more than one message (e.g.
+    a wildcard level regex matching every pressure/hybrid level at once -
+    see hrrr2power.config._normalize_pattern).
+    """
     init_times = [day + pd.Timedelta(hours=h) for h in init_hours]
     expected_requests = len(init_times) * len(fxx) * len(search_patterns)
 
     print(f"\n=== {day.strftime('%Y-%m-%d')} ===")
     print(f"Init hours   : {init_hours}")
     print(f"Product      : {product}  fxx={fxx}")
-    print(f"Variables    : {[name for name, _ in search_patterns]}")
+    print(f"Variables    : {[name for name, _, _ in search_patterns]}")
     if local_archive_dir is not None:
         print(f"Local archive: {local_archive_dir}  (tried first per file, falls back to network)")
     print(f"Planned requests: {expected_requests}")
 
     tasks = []
     skipped_requests = 0
-    for search_name, search_string in search_patterns:
+    for search_name, search_string, message_count in search_patterns:
+        effective_message_count = message_count if message_count is not None else expected_message_count
         for fxx_value in fxx:
             if overwrite:
                 pending_times = init_times
@@ -453,7 +513,7 @@ def download_one_day(
             skipped_requests += len(init_times) - len(pending_times)
             tasks.extend(
                 (search_name, search_string, t, fxx_value, retries, retry_wait, save_dir, log_file,
-                 product, expected_message_count, filename_template, local_archive_dir,
+                 product, effective_message_count, filename_template, local_archive_dir,
                  local_archive_filename_template)
                 for t in pending_times
             )
