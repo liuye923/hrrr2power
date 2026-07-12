@@ -2,9 +2,9 @@
 # 50mb..1013.2mb) for AL_ST sites - one month. Unlike the other
 # Southern_Co configs (single near-surface level per variable), u_plev/
 # v_plev here each pack all 40 levels into one variable with an extra
-# isobaricInhPa dimension - see config/default_download_prs_multilevel.yaml
-# for how that's declared (message_count per search pattern) and why it
-# needs a separate base config from the regular default_download_prs.yaml.
+# isobaricInhPa dimension - see config/default_download_prs.yaml's
+# u_plev/v_plev entries for how that's declared (message_count per
+# search pattern).
 
 product: prs
 fxx: 0
@@ -22,7 +22,7 @@ processing:
   end_date: "20250228"
 
 download:
-  configure_file: /global/cfs/projectdirs/m1657/liuy351/DATA/HRRR/download_fastheribie/scripts/config/default_download_prs_multilevel.yaml
+  configure_file: /global/cfs/projectdirs/m1657/liuy351/DATA/HRRR/download_fastheribie/scripts/config/default_download_prs.yaml
   workers: 16
   retries: 3
   retry_wait: 5.0

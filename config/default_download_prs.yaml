@@ -47,6 +47,27 @@ overwrite: false
 # One entry per downloadable variable. Each name becomes its own download
 # group/folder: <save_dir>/<name>/YYYYMMDD/hrrr.tHHz.wrfprsfNN.grib2
 # Run `inventory-prs` to discover more variables/patterns.
+#
+# A search_patterns entry can also be a dict {pattern, message_count}
+# instead of a plain string, for a variable whose pattern matches more
+# than one grib message per file - e.g. u_plev/v_plev below match all 40
+# HRRR pressure levels at once via a wildcard level regex, which cfgrib
+# decodes as a single variable with an extra isobaricInhPa dimension
+# rather than 40 separate ones. message_count must be the exact number of
+# messages the pattern matches (confirmed via
+# hrrr2power.download.count_matching_messages) - it's how
+# is_valid_grib_file's integrity check knows a download is complete, and
+# how the local-archive byte-range read groups contiguous messages
+# correctly (see hrrr2power.download.extract_from_local_archive).
+#
+# NOTE: download-prs's standalone CLI downloads *every* search_patterns
+# entry below if a run config omits its own "variables:" key - u_plev/v_plev
+# are much larger than the rest (~24MB/hour/variable for all 40 levels, vs
+# KB for a single near-surface level), so an existing download-prs run
+# config relying on that default will now also start fetching them. Set an
+# explicit "variables:" list in such a config if you don't want that.
+# extract-site/extract-region are unaffected either way, since they always
+# pass an explicit variable list derived from their own "variables:" block.
 search_patterns:
   t2m:  ":TMP:2 m above ground:"
   d2m:  ":DPT:2 m above ground:"
@@ -55,3 +76,18 @@ search_patterns:
   u10:  ":UGRD:10 m above ground:"
   v10:  ":VGRD:10 m above ground:"
   psfc: ":PRES:surface:"
+
+  # Multi-level (all 40 pressure levels at once) - confirmed via
+  # hrrr2power.download.count_matching_messages against hrrr.20250601:
+  # UGRD/VGRD each match exactly 40 messages (50mb..1013.2mb). Re-verify
+  # if HRRR's vertical level set ever changes (unlikely, but not
+  # guaranteed stable across major model version upgrades).
+  u_plev:
+    # Non-capturing group (?:...) - a capturing group here makes pandas'
+    # str.contains(regex=True) print a "has match groups" warning on every
+    # single call (confirmed in practice: one warning per task).
+    pattern: ':UGRD:\d+(?:\.\d+)? mb:'
+    message_count: 40
+  v_plev:
+    pattern: ':VGRD:\d+(?:\.\d+)? mb:'
+    message_count: 40

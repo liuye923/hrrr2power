@@ -12,11 +12,11 @@ region:
   max_lon: -96.0
 
 grib_dir: /global/cfs/projectdirs/m1657/liuy351/DATA/HRRR/download_fastheribie/grib2_prsf00
-output_dir: /global/cfs/projectdirs/m1657/liuy351/DATA/HRRR/download_fastheribie/sites/southern_co_region_test
+output_dir: /global/cfs/projectdirs/m1657/liuy351/DATA/HRRR/download_fastheribie/sites/southern_co_region
 
 processing:
   start_date: "20250201"
-  end_date: "20250201"
+  end_date: "20250228"
 
 download:
   configure_file: /global/cfs/projectdirs/m1657/liuy351/DATA/HRRR/download_fastheribie/scripts/config/default_download_prs.yaml
@@ -33,6 +33,11 @@ variables:
       t2m: t2m
       u: u80
       v: v80
+  isobaricInhPa:
+    enabled: true
+    vars:
+      u: u_plev
+      v: v_plev
 
 options:
   skip_existing: true
